@@ -1,0 +1,10 @@
+# Runtime dependencies
+pygame>=2.0.0
+
+# Raspberry Pi hardware dependencies (optional - only needed on Raspberry Pi)
+# RPi.GPIO>=0.7.0
+
+# Test dependencies (optional - tests can run with built-in unittest)
+# pytest>=7.0.0
+# pytest-cov>=4.0.0
+
