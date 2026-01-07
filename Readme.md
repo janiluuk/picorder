@@ -1,10 +1,10 @@
-# Raspberry Pi TFT Audio Recorder #
+# Picorder - a Raspberry Pi TFT Audio Recorder
 
-A Raspberry Pi menu system for audio recording with automatic screen management, compatible with Waveshare 3.5-inch TFT touch display.
+A Raspberry Pi menu system for audio recording with manual and automatic modes, compatible with Waveshare 3.5-inch TFT touch display.
 
 ## Hardware Compatibility ##
 
-This project is compatible with the **Waveshare 3.5-inch Raspberry Pi LCD** display.
+This project is compatible with the **Waveshare 3.5-inch Raspberry Pi LCD** display. Built for Raspberry Pi devices. You can use device you want for recording. 
 
 ## Setup ##
 
@@ -24,7 +24,7 @@ This project is compatible with the **Waveshare 3.5-inch Raspberry Pi LCD** disp
 
    Clone this repository:
    ```bash
-   git clone https://github.com/So-Cool/rPiTFT.git /home/pi/picorder
+   git clone https://github.com/janiluuk/picorder.git /home/pi/picorder
    cd /home/pi/picorder
    pip install -r requirements.txt
    ```
