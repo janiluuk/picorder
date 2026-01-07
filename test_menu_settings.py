@@ -182,49 +182,49 @@ class TestMenuSettings(unittest.TestCase):
         menu_settings.button(6, handler1, handler2, handler3, handler4, handler5, handler6)
         self.assertEqual(call_order, [6])
 
-    @patch('pygame.mouse.get_pos')
+    @patch('menu_settings.pygame.mouse.get_pos')
     def test_on_touch_button_1(self, mock_get_pos):
         """Test on_touch detects button 1"""
         mock_get_pos.return_value = (100, 130)
         result = menu_settings.on_touch()
         self.assertEqual(result, 1)
 
-    @patch('pygame.mouse.get_pos')
+    @patch('menu_settings.pygame.mouse.get_pos')
     def test_on_touch_button_2(self, mock_get_pos):
         """Test on_touch detects button 2"""
         mock_get_pos.return_value = (350, 130)
         result = menu_settings.on_touch()
         self.assertEqual(result, 2)
 
-    @patch('pygame.mouse.get_pos')
+    @patch('menu_settings.pygame.mouse.get_pos')
     def test_on_touch_button_3(self, mock_get_pos):
         """Test on_touch detects button 3"""
         mock_get_pos.return_value = (100, 200)
         result = menu_settings.on_touch()
         self.assertEqual(result, 3)
 
-    @patch('pygame.mouse.get_pos')
+    @patch('menu_settings.pygame.mouse.get_pos')
     def test_on_touch_button_4(self, mock_get_pos):
         """Test on_touch detects button 4"""
         mock_get_pos.return_value = (350, 200)
         result = menu_settings.on_touch()
         self.assertEqual(result, 4)
 
-    @patch('pygame.mouse.get_pos')
+    @patch('menu_settings.pygame.mouse.get_pos')
     def test_on_touch_button_5(self, mock_get_pos):
         """Test on_touch detects button 5"""
         mock_get_pos.return_value = (100, 280)
         result = menu_settings.on_touch()
         self.assertEqual(result, 5)
 
-    @patch('pygame.mouse.get_pos')
+    @patch('menu_settings.pygame.mouse.get_pos')
     def test_on_touch_button_6(self, mock_get_pos):
         """Test on_touch detects button 6"""
         mock_get_pos.return_value = (350, 280)
         result = menu_settings.on_touch()
         self.assertEqual(result, 6)
 
-    @patch('pygame.mouse.get_pos')
+    @patch('menu_settings.pygame.mouse.get_pos')
     def test_on_touch_no_button(self, mock_get_pos):
         """Test on_touch returns None for positions outside buttons"""
         mock_get_pos.return_value = (10, 10)
@@ -233,16 +233,24 @@ class TestMenuSettings(unittest.TestCase):
         # The function will return None implicitly if no conditions match
         self.assertIsNone(result)
 
-    @patch('subprocess.Popen')
+    @patch('menu_settings.Popen')
     def test_run_cmd(self, mock_popen):
         """Test run_cmd executes command and returns decoded output"""
         mock_process = MagicMock()
-        mock_process.communicate.return_value = (b"test output\n", None)
+        # Mock the communicate method to return test output
+        mock_process.communicate.return_value = (b"test output\n", b"")
         mock_popen.return_value = mock_process
         
-        result = menu_settings.run_cmd("echo test")
+        # Test with list input (safest, no shell interpretation)
+        result = menu_settings.run_cmd(["echo", "test"])
+        # The output should be decoded and returned
         self.assertEqual(result, "test output\n")
+        # Should be called with the list directly
         mock_popen.assert_called_once()
+        # Verify it was called with the list
+        call_args = mock_popen.call_args[0][0]
+        self.assertIsInstance(call_args, list)
+        self.assertEqual(call_args, ["echo", "test"])
 
     def test_color_constants(self):
         """Test color constants are tuples of 3 integers"""

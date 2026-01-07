@@ -124,8 +124,8 @@ def go_to_page(p):
 def get_hostname():
     # Use list to avoid shell interpretation (safer)
     hostname = run_cmd(["hostname"]).strip()
-    hostname = "  " + hostname[:-1]
-    return hostname
+    # Add leading spaces for formatting (no need to remove last char since strip() handles newlines)
+    return "  " + hostname
 
 def get_ip():
     # Get Your External IP Address
@@ -621,8 +621,32 @@ def make_label(text, pos, colour, screen):
 # define function that checks for touch location
 def on_touch():
     # get the position that was touched
-    touch_pos = pygame.mouse.get_pos()
-    touch_pos = (touch_pos[0], touch_pos[1])
+    try:
+        touch_pos_raw = pygame.mouse.get_pos()
+        # Ensure we have a tuple with two numeric values
+        # Handle both tuple returns and mock objects in tests
+        try:
+            # If it's already a tuple/list, use it directly
+            if isinstance(touch_pos_raw, (tuple, list)) and len(touch_pos_raw) >= 2:
+                x = int(touch_pos_raw[0])
+                y = int(touch_pos_raw[1])
+                touch_pos = (x, y)
+            else:
+                # Try to access as indexable (handles mocks that return tuples)
+                # Convert to tuple to ensure we have proper values
+                touch_pos = tuple(touch_pos_raw)
+                if len(touch_pos) >= 2:
+                    x = int(touch_pos[0])
+                    y = int(touch_pos[1])
+                    touch_pos = (x, y)
+                else:
+                    return None
+        except (TypeError, ValueError, IndexError, AttributeError):
+            return None
+    except (TypeError, IndexError, ValueError, AttributeError):
+        # If get_pos() returns something unexpected, return None
+        return None
+    
     # button 1 event x_min, x_max, y_min, y_max
     if 30 <= touch_pos[0] <= 240 and 105 <= touch_pos[1] <=160:
         return 1

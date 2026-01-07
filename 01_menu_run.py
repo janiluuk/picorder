@@ -46,6 +46,8 @@ def _1():
         # auto_record_monitor will handle starting silentjack
     else:
         # Currently OFF and device invalid - can't turn ON
+        # Still update display to provide visual feedback that the action was rejected
+        update_display()
         return
     
     update_display()
@@ -204,8 +206,10 @@ def update_display():
     # Get audio level for meter (only if device is valid and recording)
     # Use RecordingManager for thread-safe state check
     # Get state in a single thread-safe operation to avoid race conditions
+    # Retrieve both is_recording and recording_mode atomically to ensure consistency
     import menu_settings as ms
     is_currently_recording = ms._recording_manager.is_recording
+    current_mode = ms._recording_manager.recording_mode
     audio_level = 0.0
     show_meter = False
     if device_valid and is_currently_recording:
@@ -224,10 +228,8 @@ def update_display():
     names[0] = status
     names[1] = auto_text
     # Use RecordingManager to check recording state (thread-safe)
-    # Get state in a single thread-safe operation to avoid race conditions
-    # Reuse state already retrieved above for consistency
+    # Reuse state already retrieved above for consistency (both values retrieved atomically)
     if is_currently_recording:
-        current_mode = ms._recording_manager.recording_mode
         if current_mode == "manual":
             names[2] = "Stop"
         else:
