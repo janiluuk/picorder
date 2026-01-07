@@ -8,13 +8,40 @@ import sys
 import threading
 import shutil
 import json
+import logging
+from pathlib import Path
 
 try:
     import RPi.GPIO as GPIO
     GPIO_AVAILABLE = True
-except:
-    print("No GPIO package")
+except ImportError:
     GPIO_AVAILABLE = False
+
+# Setup logging
+try:
+    LOG_DIR = Path("/home/pi/logs")
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_FILE = LOG_DIR / "picorder.log"
+    handlers = [
+        logging.FileHandler(LOG_FILE),
+        logging.StreamHandler()
+    ]
+except (OSError, PermissionError):
+    # Fallback for test environments or when /home/pi/logs can't be created
+    LOG_DIR = Path.cwd() / "logs"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_FILE = LOG_DIR / "picorder.log"
+    handlers = [logging.StreamHandler()]
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=handlers
+)
+logger = logging.getLogger(__name__)
+
+if not GPIO_AVAILABLE:
+    logger.warning("RPi.GPIO not available - GPIO features disabled")
 
 # Hardware
 SCREEN_DEVICE = "/dev/fb1"
@@ -29,21 +56,47 @@ SCREEN_OFF = "menu_screenoff.py"
 
 # bash export
 FRAMEBUFFER = "/dev/fb1"
-MENUDIR = "/home/pi/picorder/"
-RECORDING_DIR = "/home/pi/recordings/"
-CONFIG_FILE = MENUDIR + "config.json"
+MENUDIR = Path("/home/pi/picorder/")
+RECORDING_DIR = Path("/home/pi/recordings/")
+CONFIG_FILE = MENUDIR / "config.json"
 startpage = PAGE_01
 
-# Recording state
-recording_process = None
-silentjack_process = None
-recording_start_time = None
-recording_filename = None
-recording_mode = None  # "auto" or "manual"
-is_recording = False
+# Recording state - use RecordingManager as single source of truth
+from recording_manager import RecordingManager
+
+# Create global RecordingManager instance
+_recording_manager = RecordingManager(
+    recording_dir=str(RECORDING_DIR),
+    menu_dir=str(MENUDIR)
+)
+
+# Legacy global variables for backward compatibility (deprecated - use RecordingManager)
+# These are kept for compatibility but will be removed in future versions
+recording_process = None  # Deprecated
+silentjack_process = None  # Deprecated
+recording_start_time = None  # Deprecated
+recording_filename = None  # Deprecated
+recording_mode = None  # Deprecated
+is_recording = False  # Deprecated
+
+# Lock for legacy compatibility
+_recording_lock = _recording_manager._lock
+
+# Activity tracking
 last_activity_time = time.time()
 SCREEN_TIMEOUT = 30  # seconds
-SILENTJACK_SCRIPT = MENUDIR + "silentjack_monitor.sh"
+SILENTJACK_SCRIPT = MENUDIR / "silentjack_monitor.sh"
+
+# Constants
+PROCESS_TERMINATE_TIMEOUT = 2  # seconds
+PROCESS_KILL_DELAY = 0.5  # seconds
+AUTO_RECORD_POLL_INTERVAL = 0.5  # seconds
+DEVICE_VALIDATION_CACHE_TTL = 5.0  # seconds - cache device validation results
+FILE_CHECK_INTERVAL = 1.0  # seconds - check files less frequently when idle
+
+# Device validation cache
+_device_validation_cache = {}
+_device_cache_lock = threading.Lock()
 
 ################################################################################
 
@@ -64,12 +117,13 @@ def go_to_page(p):
     # next page
     pygame.quit()
     ##startx only works when we don't use subprocess here, don't know why
-    page = MENUDIR + p
+    page = str(MENUDIR / p)
     os.execvp("python3", ["python3", page])
     sys.exit()
 
 def get_hostname():
-    hostname = run_cmd("hostname")
+    # Use list to avoid shell interpretation (safer)
+    hostname = run_cmd(["hostname"]).strip()
     hostname = "  " + hostname[:-1]
     return hostname
 
@@ -92,19 +146,22 @@ def get_date():
 
 def get_temp():
     # Get CPU temperature
-    temp = run_cmd("vcgencmd measure_temp")
+    # Use list to avoid shell interpretation (safer)
+    temp = run_cmd(["vcgencmd", "measure_temp"]).strip()
     temp = "Temp: " + temp[5:-1]
     return temp
 
 def get_clock():
-    clock = run_cmd("vcgencmd measure_clock arm")
+    # Use list to avoid shell interpretation (safer)
+    clock = run_cmd(["vcgencmd", "measure_clock", "arm"]).strip()
     clock = clock.split("=")
     clock = int(clock[1][:-1]) / 1024 /1024
     clock = "Clock: " + str(clock) + "MHz"
     return clock
 
 def get_volts():
-    volts = run_cmd("vcgencmd measure_volts")
+    # Use list to avoid shell interpretation (safer)
+    volts = run_cmd(["vcgencmd", "measure_volts"]).strip()
     volts = 'Core:   ' + volts[5:-1]
     return volts
 
@@ -114,7 +171,11 @@ def get_disk_space():
         stat = shutil.disk_usage("/")
         free_gb = stat.free / (1024**3)
         return "Free: {:.1f}GB".format(free_gb)
-    except:
+    except OSError as e:
+        logger.error(f"Error getting disk space: {e}")
+        return "Free: N/A"
+    except Exception as e:
+        logger.error(f"Unexpected error getting disk space: {e}", exc_info=True)
         return "Free: N/A"
 
 def load_config():
@@ -124,27 +185,35 @@ def load_config():
         "auto_record": True
     }
     try:
-        if os.path.exists(CONFIG_FILE):
-            with open(CONFIG_FILE, 'r') as f:
+        config_path = Path(CONFIG_FILE)
+        if config_path.exists():
+            with open(config_path, 'r') as f:
                 config = json.load(f)
                 return {**default_config, **config}
-    except:
-        pass
+    except (OSError, IOError, json.JSONDecodeError) as e:
+        logger.warning(f"Error loading config: {e}, using defaults")
+    except Exception as e:
+        logger.error(f"Unexpected error loading config: {e}", exc_info=True)
     return default_config
 
 def save_config(config):
     """Save configuration to file"""
     try:
-        with open(CONFIG_FILE, 'w') as f:
+        config_path = Path(CONFIG_FILE)
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(config_path, 'w') as f:
             json.dump(config, f)
-    except:
-        pass
+    except (OSError, IOError) as e:
+        logger.error(f"Error saving config: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error saving config: {e}", exc_info=True)
 
 def get_audio_devices():
     """Get list of available audio input devices"""
     devices = [("", "None (Disabled)")]  # Add "None" option first
     try:
-        output = run_cmd("arecord -l")
+        # Use list to avoid shell interpretation (safer)
+        output = run_cmd(["arecord", "-l"])
         for line in output.split('\n'):
             if 'card' in line.lower():
                 # Extract card number and device name
@@ -156,330 +225,222 @@ def get_audio_devices():
                                 card_num = parts[i+1].rstrip(':')
                                 device_name = ' '.join(parts[parts.index('card'):])
                                 device_id = "plughw:{},0".format(card_num)
-                                # Validate device by testing if it can be opened
-                                if validate_audio_device(device_id):
+                                # Validate device by testing if it can be opened (don't use cache for enumeration)
+                                if validate_audio_device(device_id, use_cache=False):
                                     devices.append((device_id, device_name))
                                 break
-                    except Exception:
+                    except (ValueError, IndexError) as e:
+                        logger.debug(f"Error parsing device line: {e}")
                         pass
         return devices
-    except Exception:
+    except (OSError, ValueError) as e:
+        logger.error(f"Error getting audio devices: {e}")
+        return devices  # Return at least the "None" option
+    except Exception as e:
+        logger.error(f"Unexpected error getting audio devices: {e}", exc_info=True)
         return devices  # Return at least the "None" option
 
-def validate_audio_device(device):
-    """Validate that an audio device is available and can be opened"""
+def validate_audio_device(device, use_cache=True):
+    """Validate that an audio device is available and can be opened (with caching)"""
     if not device or device == "":
         return False
+    
+    # Check cache first
+    if use_cache:
+        with _device_cache_lock:
+            if device in _device_validation_cache:
+                cached_result, cached_time = _device_validation_cache[device]
+                if time.time() - cached_time < DEVICE_VALIDATION_CACHE_TTL:
+                    return cached_result
+    
+    # Perform actual validation
     try:
         # Try to list device capabilities (quick check)
-        cmd = "arecord -D {} --dump-hw-params 2>&1".format(device)
-        result = run_cmd(cmd)
+        process = Popen(["arecord", "-D", device, "--dump-hw-params"], stdout=PIPE, stderr=PIPE)
+        result = process.communicate(timeout=2)[0].decode('utf-8')
         # If device is valid, we should get hardware params, not an error
-        if "Invalid" in result or "No such" in result or "cannot find" in result.lower():
-            return False
-        return True
-    except Exception:
+        is_valid = not ("Invalid" in result or "No such" in result or "cannot find" in result.lower())
+        
+        # Cache the result
+        if use_cache:
+            with _device_cache_lock:
+                _device_validation_cache[device] = (is_valid, time.time())
+        
+        return is_valid
+    except TimeoutError:
+        logger.warning(f"Timeout validating device {device}")
+        return False
+    except (OSError, ValueError) as e:
+        logger.debug(f"Error validating device {device}: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error validating device {device}: {e}", exc_info=True)
         return False
 
 def is_audio_device_valid(device):
-    """Check if the configured audio device is still valid"""
+    """Check if the configured audio device is still valid (with caching)"""
     if not device or device == "":
         return False
-    devices = get_audio_devices()
-    device_ids = [d[0] for d in devices]
-    return device in device_ids and validate_audio_device(device)
+    # Use cached validation - don't enumerate all devices every time
+    return validate_audio_device(device, use_cache=True)
 
 def detect_audio_signal(device, threshold=0.01, sample_duration=0.1):
     """Detect if there's audio signal (for silent jack detection)"""
     try:
         # Use arecord to capture a small sample and check for non-zero data
+        # Use shell=True for pipeline command (safer than cmd.split() with pipes)
+        # Note: Device is validated elsewhere, so injection risk is minimized
         cmd = "arecord -D {} -d {} -f cd -t raw 2>/dev/null | od -An -td2 | head -1".format(
             device, sample_duration)
-        output = run_cmd(cmd)
+        output = run_cmd(cmd)  # run_cmd will detect shell operators and use shell=True
         # Check if output contains non-zero values
         values = [int(x) for x in output.split() if x.isdigit() or (x.startswith('-') and x[1:].isdigit())]
         if values:
             max_val = max([abs(v) for v in values])
             return max_val > threshold * 32768  # 16-bit audio threshold
         return False
-    except:
+    except (ValueError, OSError) as e:
+        logger.debug(f"Error detecting audio signal: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error detecting audio signal: {e}", exc_info=True)
         return False
 
+def get_audio_level(device, sample_duration=0.05):
+    """Get current audio level as a normalized value (0.0 to 1.0)"""
+    if not device or device == "":
+        return 0.0
+    
+    try:
+        # Capture a small audio sample
+        process = Popen(
+            ["arecord", "-D", device, "-d", str(sample_duration), "-f", "S16_LE", "-t", "raw"],
+            stdout=PIPE, stderr=PIPE
+        )
+        audio_data, _ = process.communicate(timeout=1)
+        
+        if len(audio_data) < 2:
+            return 0.0
+        
+        # Convert bytes to 16-bit signed integers
+        import struct
+        samples = struct.unpack('<' + 'h' * (len(audio_data) // 2), audio_data[:len(audio_data) - (len(audio_data) % 2)])
+        
+        # Calculate RMS (Root Mean Square) for better level representation
+        if len(samples) == 0:
+            return 0.0
+        
+        rms = (sum(x * x for x in samples) / len(samples)) ** 0.5
+        # Normalize to 0.0-1.0 (16-bit audio max is 32768)
+        level = min(1.0, rms / 32768.0)
+        
+        # Apply some smoothing and scaling for better visual feedback
+        # Use logarithmic scaling for more natural meter response
+        if level > 0:
+            level = (level ** 0.5) * 1.2  # Square root scaling with slight boost
+            level = min(1.0, level)
+        
+        return level
+    except Exception as e:
+        logger.debug(f"Error getting audio level: {e}")
+        return 0.0
+
 def start_recording(device, mode="manual"):
-    """Start audio recording"""
+    """Start audio recording (wrapper for RecordingManager)"""
     global recording_process, recording_start_time, recording_mode, is_recording, recording_filename
     
-    if is_recording:
-        return
+    # Validate device before attempting to record
+    if not device or device == "":
+        logger.warning("Cannot start recording: no audio device selected")
+        return False
     
-    # Create recordings directory if it doesn't exist
-    os.makedirs(RECORDING_DIR, exist_ok=True)
+    if not is_audio_device_valid(device):
+        logger.warning(f"Cannot start recording: audio device '{device}' is not available")
+        return False
     
-    # Generate filename with date and time (duration will be added when stopping)
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    recording_filename = RECORDING_DIR + "recording_{}.wav".format(timestamp)
+    # Check disk space before recording
+    try:
+        stat = shutil.disk_usage("/")
+        free_gb = stat.free / (1024**3)
+        if free_gb < 0.1:  # Less than 100MB free
+            logger.error("Insufficient disk space for recording")
+            return False
+    except OSError as e:
+        logger.error(f"Error checking disk space: {e}")
+        return False
     
-    # Start arecord process
-    cmd = "arecord -D {} -f cd -t wav {}".format(device, recording_filename)
-    recording_process = Popen(cmd.split(), stdout=PIPE, stderr=PIPE)
-    recording_start_time = time.time()
-    recording_mode = mode
-    is_recording = True
+    # Use RecordingManager to start recording
+    success = _recording_manager.start_recording(device, mode)
+    
+    # Update legacy globals for backward compatibility
+    if success:
+        with _recording_lock:
+            is_recording = True
+            recording_mode = mode
+            recording_start_time = _recording_manager.recording_start_time
+            # Note: recording_process and recording_filename are now internal to RecordingManager
+    
+    return success
 
 def start_silentjack(device):
-    """Start silentjack monitoring process"""
+    """Start silentjack monitoring process (wrapper for RecordingManager)"""
     global silentjack_process
-    
-    if silentjack_process is not None:
-        # Check if still running
-        if silentjack_process.poll() is None:
-            return  # Already running
-        else:
-            silentjack_process = None
-    
-    # Create monitor script if it doesn't exist
-    if not os.path.exists(SILENTJACK_SCRIPT):
-        create_silentjack_script(device)
-    
-    # Start silentjack with monitor script
-    # silentjack will call the script when jack is inserted/removed
-    cmd = "silentjack -i {} -o {}".format(device, SILENTJACK_SCRIPT)
-    silentjack_process = Popen(cmd.split(), stdout=PIPE, stderr=PIPE)
+    # Use RecordingManager
+    success = _recording_manager.start_silentjack(device)
+    # Update legacy global for backward compatibility (internal access needed for legacy code)
+    if success:
+        # Access internal process for legacy compatibility (not recommended for new code)
+        with _recording_lock:
+            silentjack_process = _recording_manager._silentjack_process
+    return success
 
 def stop_silentjack():
-    """Stop silentjack monitoring process"""
+    """Stop silentjack monitoring process (wrapper for RecordingManager)"""
     global silentjack_process
-    
-    if silentjack_process is not None:
-        try:
-            silentjack_process.terminate()
-            silentjack_process.wait(timeout=2)
-        except:
-            try:
-                silentjack_process.kill()
-            except:
-                pass
-        silentjack_process = None
+    # Use RecordingManager
+    success = _recording_manager.stop_silentjack()
+    silentjack_process = None  # Clear legacy global
+    return success
 
 def create_silentjack_script(device):
-    """Create script that silentjack will call when jack is inserted/removed"""
-    # Ensure recordings directory exists
-    os.makedirs(RECORDING_DIR, exist_ok=True)
-    
-    script_content = """#!/bin/bash
-# Script called by silentjack when jack state changes
-# $1 = "in" (plugged) or "out" (unplugged)
-# $2 = device name
-
-STATE="$1"
-DEVICE="{}"
-RECORDING_DIR="{}"
-MENUDIR="{}"
-
-# Ensure recordings directory exists
-mkdir -p "$RECORDING_DIR"
-
-if [ "$STATE" = "in" ]; then
-    # Jack plugged in - start recording
-    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-    FILENAME="$RECORDING_DIR/recording_$TIMESTAMP.wav"
-    arecord -D "$DEVICE" -f cd -t wav "$FILENAME" &
-    echo $! > "$MENUDIR/.recording_pid"
-    echo "$FILENAME" > "$MENUDIR/.recording_file"
-    echo "$(date +%s)" > "$MENUDIR/.recording_start"
-else
-    # Jack unplugged - stop recording and rename with duration
-    if [ -f "$MENUDIR/.recording_pid" ]; then
-        PID=$(cat "$MENUDIR/.recording_pid")
-        START_TIME=$(cat "$MENUDIR/.recording_start")
-        OLD_FILE=$(cat "$MENUDIR/.recording_file")
-        
-        # Stop the recording
-        kill $PID 2>/dev/null
-        sleep 0.5
-        
-        # Calculate duration and rename
-        if [ -f "$OLD_FILE" ]; then
-            END_TIME=$(date +%s)
-            DURATION=$((END_TIME - START_TIME))
-            HOURS=$((DURATION / 3600))
-            MINUTES=$(((DURATION % 3600) / 60))
-            SECONDS=$((DURATION % 60))
-            
-            if [ $HOURS -gt 0 ]; then
-                DUR_STR=$(printf "%02dh%02dm%02ds" $HOURS $MINUTES $SECONDS)
-            else
-                DUR_STR=$(printf "%02dm%02ds" $MINUTES $SECONDS)
-            fi
-            
-            BASE_NAME="${OLD_FILE%.wav}"
-            NEW_FILE="${BASE_NAME}_${DUR_STR}.wav"
-            mv "$OLD_FILE" "$NEW_FILE" 2>/dev/null
-        fi
-        
-        # Clean up
-        rm -f "$MENUDIR/.recording_pid" "$MENUDIR/.recording_file" "$MENUDIR/.recording_start"
-    fi
-fi
-""".format(device, RECORDING_DIR, MENUDIR)
-    
-    with open(SILENTJACK_SCRIPT, 'w') as f:
-        f.write(script_content)
-    os.chmod(SILENTJACK_SCRIPT, 0o755)
+    """Create script that silentjack will call when jack is inserted/removed (wrapper for RecordingManager)"""
+    return _recording_manager._create_silentjack_script(device)
 
 def stop_recording():
-    """Stop audio recording and rename file with duration"""
+    """Stop audio recording and rename file with duration (wrapper for RecordingManager)"""
     global recording_process, recording_start_time, recording_mode, is_recording, recording_filename
     
-    # If it's a silentjack recording, stop it via the PID file and rename
-    if recording_mode == "auto" and os.path.exists(MENUDIR + ".recording_pid"):
-        try:
-            with open(MENUDIR + ".recording_pid", 'r') as f:
-                pid = int(f.read().strip())
-            
-            # Get start time and filename
-            start_time = None
-            old_filename = None
-            if os.path.exists(MENUDIR + ".recording_start"):
-                with open(MENUDIR + ".recording_start", 'r') as f:
-                    start_time = float(f.read().strip())
-            if os.path.exists(MENUDIR + ".recording_file"):
-                with open(MENUDIR + ".recording_file", 'r') as f:
-                    old_filename = f.read().strip()
-            
-            # Stop the process
-            try:
-                os.kill(pid, 15)  # SIGTERM
-                time.sleep(0.5)  # Wait for process to stop
-            except:
-                pass
-            
-            # Rename file with duration if we have the info
-            if old_filename and start_time and os.path.exists(old_filename):
-                duration = int(time.time() - start_time)
-                new_filename = rename_with_duration(old_filename, duration)
-                if new_filename and os.path.exists(old_filename):
-                    try:
-                        os.rename(old_filename, new_filename)
-                    except:
-                        pass
-            
-            # Clean up files
-            for f in [".recording_pid", ".recording_file", ".recording_start"]:
-                try:
-                    os.remove(MENUDIR + f)
-                except:
-                    pass
-        except:
-            pass
+    # Use RecordingManager to stop recording
+    success = _recording_manager.stop_recording()
     
-    # Stop our own recording process
-    if recording_process is not None:
-        try:
-            recording_process.terminate()
-            recording_process.wait(timeout=2)
-        except:
-            try:
-                recording_process.kill()
-            except:
-                pass
-        
-        # Rename file with duration
-        if recording_filename and os.path.exists(recording_filename):
-            duration = int(time.time() - recording_start_time)
-            new_filename = rename_with_duration(recording_filename, duration)
-            if new_filename:
-                try:
-                    os.rename(recording_filename, new_filename)
-                except:
-                    pass
-        
-        recording_process = None
-        recording_filename = None
+    # Update legacy globals for backward compatibility
+    with _recording_lock:
+        is_recording = _recording_manager.is_recording
+        recording_mode = _recording_manager.recording_mode
+        recording_start_time = _recording_manager.recording_start_time
+        recording_process = None  # No longer accessible directly
+        recording_filename = None  # No longer accessible directly
     
-    recording_start_time = None
-    recording_mode = None
-    is_recording = False
+    return success
 
 def rename_with_duration(filename, duration_seconds):
-    """Rename a recording file to include duration in the name"""
-    try:
-        # Parse duration into hours, minutes, seconds
-        hours = duration_seconds // 3600
-        minutes = (duration_seconds % 3600) // 60
-        seconds = duration_seconds % 60
-        
-        # Create duration string
-        if hours > 0:
-            duration_str = "{:02d}h{:02d}m{:02d}s".format(hours, minutes, seconds)
-        else:
-            duration_str = "{:02d}m{:02d}s".format(minutes, seconds)
-        
-        # Extract directory and base filename
-        dir_path = os.path.dirname(filename)
-        base_name = os.path.basename(filename)
-        
-        # Remove .wav extension
-        if base_name.endswith('.wav'):
-            base_name = base_name[:-4]
-        
-        # Create new filename with duration
-        new_filename = os.path.join(dir_path, "{}_{}.wav".format(base_name, duration_str))
-        
-        return new_filename
-    except:
-        return None
+    """Rename a recording file to include duration in the name (wrapper for RecordingManager)"""
+    return _recording_manager._rename_with_duration(Path(filename), duration_seconds)
 
 def get_recording_status():
-    """Get recording status and duration"""
+    """Get recording status and duration (wrapper for RecordingManager)"""
     global is_recording, recording_start_time, recording_mode
     
-    # Check if silentjack is recording (for auto mode)
-    silentjack_recording = False
-    silentjack_start = None
-    if os.path.exists(MENUDIR + ".recording_start"):
-        try:
-            with open(MENUDIR + ".recording_start", 'r') as f:
-                silentjack_start = float(f.read().strip())
-            # Check if process is still running
-            if os.path.exists(MENUDIR + ".recording_pid"):
-                try:
-                    with open(MENUDIR + ".recording_pid", 'r') as f:
-                        pid = int(f.read().strip())
-                    # Check if process exists
-                    try:
-                        os.kill(pid, 0)  # Signal 0 just checks if process exists
-                        silentjack_recording = True
-                    except:
-                        # Process doesn't exist, clean up
-                        for f in [".recording_pid", ".recording_file", ".recording_start"]:
-                            try:
-                                os.remove(MENUDIR + f)
-                            except:
-                                pass
-                except:
-                    pass
-        except:
-            pass
+    # Use RecordingManager to get status
+    status, duration = _recording_manager.get_recording_status()
     
-    # Determine current recording state
-    if silentjack_recording and recording_mode == "auto":
-        # Silentjack is handling the recording
-        duration = int(time.time() - silentjack_start)
-        minutes = duration // 60
-        seconds = duration % 60
-        status = "Auto: {:02d}:{:02d}".format(minutes, seconds)
-        return status, duration
-    elif is_recording:
-        # Manual recording or our process
-        duration = int(time.time() - recording_start_time)
-        minutes = duration // 60
-        seconds = duration % 60
-        mode_str = "Auto" if recording_mode == "auto" else "Manual"
-        status = "{}: {:02d}:{:02d}".format(mode_str, minutes, seconds)
-        return status, duration
-    else:
-        return "Not Recording", 0
+    # Update legacy globals for backward compatibility
+    with _recording_lock:
+        is_recording = _recording_manager.is_recording
+        recording_mode = _recording_manager.recording_mode
+        recording_start_time = _recording_manager.recording_start_time
+    
+    return status, duration
 
 def check_silence(device, duration=20):
     """Check if there's been silence for specified duration (for manual recording)"""
@@ -493,21 +454,40 @@ def update_activity():
     last_activity_time = time.time()
 
 def should_screen_timeout():
-    """Check if screen should timeout (30s idle, but not when recording)"""
-    global is_recording, last_activity_time
-    if is_recording:
+    """
+    Check if screen should timeout.
+    
+    Screen times out after SCREEN_TIMEOUT seconds of inactivity, but:
+    - Never times out while recording (manual or auto)
+    - Always checks current state (thread-safe)
+    
+    Returns:
+        bool: True if screen should timeout, False otherwise
+    """
+    global last_activity_time
+    # Use RecordingManager to check recording state (thread-safe)
+    # Screen should never timeout during active recording
+    if _recording_manager.is_recording:
         return False
-    return (time.time() - last_activity_time) > SCREEN_TIMEOUT
+    
+    # Check if idle time exceeds timeout threshold
+    idle_time = time.time() - last_activity_time
+    return idle_time > SCREEN_TIMEOUT
 
 # Turn screen on
 def screen_on():
     if GPIO_AVAILABLE:
         try:
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setup(18, GPIO.OUT)
             backlight = GPIO.PWM(18, 1023)
             backlight.start(100)
-            GPIO.cleanup()
-        except:
-            pass
+            # Don't cleanup GPIO while PWM is active - it will stop the backlight
+            # Store reference to keep it alive
+            screen_on._backlight = backlight
+            logger.debug("Screen turned on")
+        except Exception as e:
+            logger.error(f"Error turning screen on: {e}")
     update_activity()
     go_to_page(PAGE_01)
 
@@ -515,10 +495,19 @@ def screen_on():
 def screen_off():
     if GPIO_AVAILABLE:
         try:
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setup(18, GPIO.OUT)
             backlight = GPIO.PWM(18, 0.1)
             backlight.start(0)
-        except:
-            pass
+            # Clean up previous backlight if it exists
+            if hasattr(screen_on, '_backlight'):
+                try:
+                    screen_on._backlight.stop()
+                except Exception as e:
+                    logger.debug(f"Error stopping previous backlight: {e}")
+            logger.debug("Screen turned off")
+        except Exception as e:
+            logger.error(f"Error turning screen off: {e}")
 
 def check_service(srvc):
     if not srvc:
@@ -537,7 +526,8 @@ def check_service(srvc):
             return True
         else:
             return False
-    except:
+    except Exception as e:
+        logger.debug(f"Error checking service {srvc}: {e}")
         return False
 
 def s2c(srvc):
@@ -653,9 +643,59 @@ def on_touch():
         return 6
 
 def run_cmd(cmd):
-    process = Popen(cmd.split(), stdout=PIPE)
-    output = process.communicate()[0]
-    return output.decode('utf-8')
+    """
+    Run a command and return its output.
+    
+    Args:
+        cmd: Either a string (will be split for simple commands) or a list of arguments.
+             For shell commands with pipes/redirects, use shell=True explicitly.
+    
+    Returns:
+        Decoded output string
+    """
+    # If cmd is already a list, use it directly (safe - no shell interpretation)
+    if isinstance(cmd, list):
+        try:
+            process = Popen(cmd, stdout=PIPE, stderr=PIPE)
+            output, _ = process.communicate()
+            return output.decode('utf-8')
+        except OSError as e:
+            logger.error(f"Error running command {cmd}: {e}")
+            return ""
+        except Exception as e:
+            logger.error(f"Unexpected error running command {cmd}: {e}", exc_info=True)
+            return ""
+    
+    # For string commands, check if they contain shell operators
+    # If they do, we need shell=True (less safe but necessary for pipes/redirects)
+    shell_operators = ['|', '>', '<', '&', ';', '&&', '||', '`', '$(']
+    has_shell_ops = any(op in cmd for op in shell_operators) or cmd.strip().startswith('#')
+    
+    try:
+        if has_shell_ops:
+            # Shell command with operators - use shell=True but be careful
+            process = Popen(cmd, shell=True, stdout=PIPE, stderr=PIPE)
+            output, _ = process.communicate()
+            return output.decode('utf-8')
+        else:
+            # Simple command - use shlex.split() to properly handle quoted arguments
+            # This is safer than split() as it handles spaces in quoted strings correctly
+            import shlex
+            try:
+                args = shlex.split(cmd)
+                process = Popen(args, stdout=PIPE, stderr=PIPE)
+                output, _ = process.communicate()
+                return output.decode('utf-8')
+            except ValueError as e:
+                # Invalid quoting in command string
+                logger.error(f"Error parsing command '{cmd}': {e}")
+                return ""
+    except OSError as e:
+        logger.error(f"Error running command {cmd}: {e}")
+        return ""
+    except Exception as e:
+        logger.error(f"Unexpected error running command {cmd}: {e}", exc_info=True)
+        return ""
 
 def run_proc(proc, f, a):
     pygame.quit()
@@ -706,8 +746,35 @@ def init(draw=True):
 
         return screen
 
+def draw_audio_meter(screen, level, x=400, y=30, width=20, height=60):
+    """Draw a minimalistic vertical audio level meter"""
+    # Draw background (dark)
+    pygame.draw.rect(screen, black, (x, y, width, height))
+    pygame.draw.rect(screen, tron_regular, (x, y, width, height), 1)
+    
+    # Calculate filled height based on level (0.0 to 1.0)
+    filled_height = int(height * level)
+    
+    if filled_height > 0:
+        # Draw filled portion with color gradient
+        # Green for low levels, yellow for mid, red for high
+        if level < 0.5:
+            color = green
+        elif level < 0.8:
+            color = tron_yel
+        else:
+            color = red
+        
+        # Draw from bottom up
+        fill_y = y + height - filled_height
+        pygame.draw.rect(screen, color, (x + 1, fill_y, width - 2, filled_height))
+        
+        # Add a subtle highlight
+        if filled_height > 2:
+            pygame.draw.line(screen, tron_light, (x + 1, fill_y), (x + width - 2, fill_y), 1)
+
 def populate_screen(names, screen, service=["","","","","",""], label1=True,
-        label2=False, label3=False, b12=True, b34=True, b56=True):
+        label2=False, label3=False, b12=True, b34=True, b56=True, show_audio_meter=False, audio_level=0.0):
     # Buttons and labels
     # First Row Label
     if label1:
@@ -728,6 +795,10 @@ def populate_screen(names, screen, service=["","","","","",""], label1=True,
     if b56:
         make_button(names[5], button_pos_5, s2c(service[4]), screen)
         make_button(names[6], button_pos_6, s2c(service[5]), screen)
+    
+    # Draw audio meter if requested
+    if show_audio_meter:
+        draw_audio_meter(screen, audio_level)
 
 def main(buttons=[], update_callback=None):
     if buttons:
@@ -735,19 +806,27 @@ def main(buttons=[], update_callback=None):
         sleep_delay=0.1
     else:
         sleep_delay=0.4
-    #While loop to manage touch screen inputs
+    # While loop to manage touch screen inputs
+    # Note: pygame.event.get() is non-blocking, so timeout check happens every loop iteration
     while 1:
-        # Check screen timeout
+        # Check screen timeout before processing events
+        # This ensures screen can timeout even if no events are received
         if should_screen_timeout():
             screen_off()
-            # Wait for touch to wake up
+            # Wait for touch to wake up screen
+            # Keep checking for wake-up events and recording state (screen should wake if recording starts)
             while should_screen_timeout():
+                # Check events without blocking - allows immediate wake on touch
                 for event in pygame.event.get():
                     if event.type == pygame.MOUSEBUTTONDOWN:
                         screen_on()
+                        update_activity()  # Reset timeout timer
                         break
+                # Short sleep to reduce CPU usage while screen is off
+                # If recording starts while screen is off, it will wake automatically
                 time.sleep(0.5)
         
+        # Process all pending events (non-blocking)
         for event in pygame.event.get():
             if event.type == pygame.MOUSEBUTTONDOWN:
                 update_activity()
@@ -768,8 +847,8 @@ def main(buttons=[], update_callback=None):
         if update_callback and buttons:
             try:
                 update_callback()
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"Error in update callback: {e}", exc_info=True)
         
         if buttons:
             pygame.display.update()

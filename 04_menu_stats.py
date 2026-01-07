@@ -4,13 +4,21 @@ from menu_settings import *
 
 ################################################################################
 def _1():
+    """Button 1 handler - stats display buttons have no actions (display only)"""
     pass
+
 def _2():
+    """Button 2 handler - stats display buttons have no actions (display only)"""
     pass
+
 def _3():
+    """Button 3 handler - stats display buttons have no actions (display only)"""
     pass
+
 def _4():
+    """Button 4 handler - stats display buttons have no actions (display only)"""
     pass
+
 def _5():
     # next page
     go_to_page(PAGE_03)

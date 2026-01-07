@@ -10,11 +10,11 @@ This project is compatible with the **Waveshare 3.5-inch Raspberry Pi LCD** disp
 
 1. **Install LCD-Show library**
 
-   Download and install the LCD-Show library from Waveshare:
-   ```
-   wget http://www.waveshare.com/w/upload/4/4b/LCD-show-161112.tar.gz
-   tar xvf LCD-show-*.tar.gz
-   cd LCD-show-*
+   Download and install the LCD-Show library:
+   ```bash
+   git clone https://github.com/goodtft/LCD-show.git
+   chmod -R 755 LCD-show/LCD35-show
+   cd LCD-show/
    sudo ./LCD35-show
    ```
 
@@ -50,6 +50,59 @@ This project is compatible with the **Waveshare 3.5-inch Raspberry Pi LCD** disp
 - **Disk Space Monitoring**: View available disk space
 - **Screen Management**: Screen turns off after 30 seconds of inactivity, stays on during recording
 - **Smart File Naming**: Recordings are automatically named with date, time, and duration (e.g., `recording_20240115_143022_05m32s.wav`)
+
+## Usage ##
+
+### Main Menu (Recording)
+
+The main menu is displayed when you start the application. The screen shows:
+
+- **Top Row**: Current recording status and duration (e.g., "Manual: 05:32" or "Not Recording")
+- **Row 1**: Auto-record status ("Auto: ON" or "Auto: OFF")
+- **Row 2**: Record button ("Record" or "Stop" depending on state)
+
+**Button Functions:**
+1. **Button 1**: Toggle auto-record ON/OFF (only works if valid audio device is selected)
+2. **Button 2**: Start/stop manual recording
+3. **Button 3**: Stop any active recording
+4. **Button 4**: Open Settings menu
+5. **Button 5**: Turn screen off (enters sleep mode)
+6. **Button 6**: (Not used in main menu)
+
+**Auto-Record Mode:**
+- When enabled, the device automatically starts recording when you plug in a 3.5mm audio jack
+- Recording stops automatically when you unplug the jack
+- Auto-record can only be enabled if a valid audio input device is configured
+
+**Manual Recording:**
+- Press Button 2 to start recording manually
+- Press Button 2 again (or Button 3) to stop recording
+- Manual recordings are saved with duration in the filename
+
+### Settings Menu
+
+Access the settings menu by pressing Button 4 from the main menu.
+
+**Button Functions:**
+1. **Button 1**: Cycle through available audio input devices
+2. **Button 2**: (Not used)
+3. **Button 3**: (Not used)
+4. **Button 4**: (Not used)
+5. **Button 5**: Return to previous page (Main Menu)
+6. **Button 6**: (Not used)
+
+**Selecting Audio Device:**
+- Press Button 1 repeatedly to cycle through available audio input devices
+- "None (Disabled)" means no audio device is selected (recording disabled)
+- The selected device is automatically validated before use
+- If a device becomes unavailable, auto-record is automatically disabled
+
+### Screen Timeout
+
+- Screen automatically turns off after 30 seconds of inactivity
+- Screen stays on while recording (manual or auto)
+- Touch the screen to wake it up when it's off
+- Screen will also wake up automatically if a recording starts while it's off
 
 ## Recordings ##
 

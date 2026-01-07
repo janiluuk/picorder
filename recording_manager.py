@@ -5,8 +5,16 @@ Recording Manager - Handles all recording operations with thread safety
 import os
 import time
 import threading
+import logging
 from subprocess import Popen, PIPE
 from pathlib import Path
+
+# Setup logging
+logger = logging.getLogger(__name__)
+
+# Constants
+PROCESS_TERMINATE_TIMEOUT = 2  # seconds
+PROCESS_KILL_DELAY = 0.5  # seconds
 
 
 class RecordingManager:
@@ -15,7 +23,11 @@ class RecordingManager:
     def __init__(self, recording_dir="/home/pi/recordings/", menu_dir="/home/pi/picorder/"):
         self.recording_dir = Path(recording_dir)
         self.menu_dir = Path(menu_dir)
-        self.recording_dir.mkdir(parents=True, exist_ok=True)
+        # Try to create directory, but don't fail if we can't (e.g., in test environment)
+        try:
+            self.recording_dir.mkdir(parents=True, exist_ok=True)
+        except (OSError, PermissionError) as e:
+            logger.warning(f"Could not create recording directory {self.recording_dir}: {e}")
         
         self._lock = threading.Lock()
         self._recording_process = None
@@ -50,11 +62,23 @@ class RecordingManager:
     
     def start_recording(self, device, mode="manual"):
         """Start audio recording"""
+        import shutil
         with self._lock:
             if self._is_recording:
                 return False
             
             try:
+                # Check disk space before recording
+                try:
+                    stat = shutil.disk_usage(self.recording_dir)
+                    free_gb = stat.free / (1024**3)
+                    if free_gb < 0.1:  # Less than 100MB free
+                        logger.error("Insufficient disk space for recording")
+                        return False
+                except OSError as e:
+                    logger.error(f"Error checking disk space: {e}")
+                    return False
+                
                 # Generate filename with timestamp
                 timestamp = time.strftime("%Y%m%d_%H%M%S")
                 self._recording_filename = self.recording_dir / f"recording_{timestamp}.wav"
@@ -65,9 +89,13 @@ class RecordingManager:
                 self._recording_start_time = time.time()
                 self._recording_mode = mode
                 self._is_recording = True
+                logger.info(f"Started {mode} recording: {self._recording_filename}")
                 return True
+            except OSError as e:
+                logger.error(f"OS error starting recording: {e}")
+                return False
             except Exception as e:
-                print(f"Error starting recording: {e}")
+                logger.error(f"Unexpected error starting recording: {e}", exc_info=True)
                 return False
     
     def stop_recording(self):
@@ -86,12 +114,17 @@ class RecordingManager:
             if self._recording_process is not None:
                 try:
                     self._recording_process.terminate()
-                    self._recording_process.wait(timeout=2)
-                except Exception:
+                    self._recording_process.wait(timeout=PROCESS_TERMINATE_TIMEOUT)
+                    logger.debug("Recording process terminated gracefully")
+                except TimeoutError:
+                    logger.warning("Recording process did not terminate, killing...")
                     try:
                         self._recording_process.kill()
-                    except Exception:
-                        pass
+                        self._recording_process.wait()
+                    except Exception as e:
+                        logger.error(f"Error killing recording process: {e}")
+                except Exception as e:
+                    logger.error(f"Error terminating recording process: {e}")
                 
                 # Rename file with duration
                 if self._recording_filename and self._recording_filename.exists():
@@ -100,9 +133,21 @@ class RecordingManager:
                     if new_filename:
                         try:
                             self._recording_filename.rename(new_filename)
+                            logger.info(f"Renamed recording file to: {new_filename}")
+                        except OSError as e:
+                            logger.error(f"OS error renaming file {self._recording_filename}: {e}")
                         except Exception as e:
-                            print(f"Error renaming file: {e}")
+                            logger.error(f"Unexpected error renaming file: {e}", exc_info=True)
                 
+                # Close file handles before clearing
+                if self._recording_process is not None:
+                    try:
+                        if self._recording_process.stdout:
+                            self._recording_process.stdout.close()
+                        if self._recording_process.stderr:
+                            self._recording_process.stderr.close()
+                    except Exception:
+                        pass
                 self._recording_process = None
                 self._recording_filename = None
             
@@ -154,9 +199,16 @@ class RecordingManager:
                 except Exception:
                     pass
             
+            logger.info("Stopped silentjack recording")
             return True
+        except ValueError as e:
+            logger.error(f"Invalid PID in silentjack recording file: {e}")
+            return False
+        except OSError as e:
+            logger.error(f"OS error stopping silentjack recording: {e}")
+            return False
         except Exception as e:
-            print(f"Error stopping silentjack recording: {e}")
+            logger.error(f"Unexpected error stopping silentjack recording: {e}", exc_info=True)
             return False
     
     def _rename_with_duration(self, filename, duration_seconds):
@@ -177,8 +229,11 @@ class RecordingManager:
             base_name = filename.stem
             new_filename = filename.parent / f"{base_name}_{duration_str}.wav"
             return new_filename
+        except (ValueError, OSError) as e:
+            logger.error(f"Error creating duration filename: {e}")
+            return None
         except Exception as e:
-            print(f"Error creating duration filename: {e}")
+            logger.error(f"Unexpected error creating duration filename: {e}", exc_info=True)
             return None
     
     def get_recording_status(self):
@@ -228,8 +283,10 @@ class RecordingManager:
         for f in [self.recording_pid_file, self.recording_file_file, self.recording_start_file]:
             try:
                 f.unlink(missing_ok=True)
-            except Exception:
-                pass
+            except OSError as e:
+                logger.debug(f"Error cleaning up silentjack file {f}: {e}")
+            except Exception as e:
+                logger.error(f"Unexpected error cleaning up silentjack file {f}: {e}", exc_info=True)
     
     def start_silentjack(self, device):
         """Start silentjack monitoring process"""
@@ -248,9 +305,25 @@ class RecordingManager:
                 # Start silentjack
                 cmd = ["silentjack", "-i", device, "-o", str(self.silentjack_script)]
                 self._silentjack_process = Popen(cmd, stdout=PIPE, stderr=PIPE)
+                logger.info(f"Started silentjack monitoring for device: {device}")
                 return True
+            except OSError as e:
+                logger.error(f"OS error starting silentjack: {e}")
+                return False
             except Exception as e:
-                print(f"Error starting silentjack: {e}")
+                logger.error(f"Unexpected error starting silentjack: {e}", exc_info=True)
+                return False
+    
+    @property
+    def is_silentjack_running(self):
+        """Check if silentjack is currently running"""
+        with self._lock:
+            if self._silentjack_process is None:
+                return False
+            # Check if process is still running (poll() returns None if running)
+            try:
+                return self._silentjack_process.poll() is None
+            except (OSError, ProcessLookupError):
                 return False
     
     def stop_silentjack(self):
@@ -259,27 +332,33 @@ class RecordingManager:
             if self._silentjack_process is not None:
                 try:
                     self._silentjack_process.terminate()
-                    self._silentjack_process.wait(timeout=2)
-                except Exception:
+                    self._silentjack_process.wait(timeout=PROCESS_TERMINATE_TIMEOUT)
+                    logger.debug("Silentjack process terminated gracefully")
+                except TimeoutError:
+                    logger.warning("Silentjack process did not terminate, killing...")
                     try:
                         self._silentjack_process.kill()
-                    except Exception:
-                        pass
+                        self._silentjack_process.wait()
+                    except Exception as e:
+                        logger.error(f"Error killing silentjack process: {e}")
+                except Exception as e:
+                    logger.error(f"Error terminating silentjack process: {e}")
                 self._silentjack_process = None
                 return True
             return False
     
     def _create_silentjack_script(self, device):
         """Create script that silentjack will call when jack is inserted/removed"""
-        script_content = f"""#!/bin/bash
+        # Use .format() instead of f-string to avoid issues with bash ${} syntax
+        script_content = """#!/bin/bash
 # Script called by silentjack when jack state changes
 # $1 = "in" (plugged) or "out" (unplugged)
 # $2 = device name
 
 STATE="$1"
 DEVICE="{device}"
-RECORDING_DIR="{self.recording_dir}"
-MENUDIR="{self.menu_dir}"
+RECORDING_DIR="{recording_dir}"
+MENUDIR="{menu_dir}"
 
 # Ensure recordings directory exists
 mkdir -p "$RECORDING_DIR"
@@ -303,37 +382,66 @@ else
         kill $PID 2>/dev/null
         sleep 0.5
         
-        # Calculate duration and rename
+        # Calculate duration and rename with error checking
         if [ -f "$OLD_FILE" ]; then
             END_TIME=$(date +%s)
             DURATION=$((END_TIME - START_TIME))
-            HOURS=$((DURATION / 3600))
-            MINUTES=$(((DURATION % 3600) / 60))
-            SECONDS=$((DURATION % 60))
             
-            if [ $HOURS -gt 0 ]; then
-                DUR_STR=$(printf "%02dh%02dm%02ds" $HOURS $MINUTES $SECONDS)
-            else
-                DUR_STR=$(printf "%02dm%02ds" $MINUTES $SECONDS)
+            # Only rename if duration is valid (greater than 0)
+            if [ $DURATION -gt 0 ]; then
+                HOURS=$((DURATION / 3600))
+                MINUTES=$(((DURATION % 3600) / 60))
+                SECONDS=$((DURATION % 60))
+                
+                if [ $HOURS -gt 0 ]; then
+                    DUR_STR=$(printf "%02dh%02dm%02ds" $HOURS $MINUTES $SECONDS)
+                else
+                    DUR_STR=$(printf "%02dm%02ds" $MINUTES $SECONDS)
+                fi
+                
+                # Extract base filename without .wav extension
+                # Use double braces {{}} to escape in Python format() - generates single braces {{}} in bash
+                BASE_NAME="${{OLD_FILE%.wav}}"
+                # Combine base name and duration with proper variable expansion
+                # Double braces {{}} in Python template become single braces {{}} in bash
+                # This ensures bash correctly expands both variables as ${{BASE_NAME}} and ${{DUR_STR}}
+                # Without braces, bash would interpret $BASE_NAME_ as a single variable name
+                NEW_FILE="${{BASE_NAME}}_${{DUR_STR}}.wav"
+                
+                # Rename with error checking - verify source exists and rename succeeds
+                if [ -f "$OLD_FILE" ]; then
+                    if mv "$OLD_FILE" "$NEW_FILE" 2>/dev/null && [ -f "$NEW_FILE" ]; then
+                        # Successfully renamed - file exists at new location
+                        :
+                    else
+                        # Rename failed - log error (to stderr which silentjack may capture)
+                        echo "Error: Failed to rename recording file" >&2
+                        # Keep original file to avoid data loss
+                    fi
+                fi
             fi
-            
-            BASE_NAME="${{OLD_FILE%.wav}}"
-            NEW_FILE="$BASE_NAME_$DUR_STR.wav"
-            mv "$OLD_FILE" "$NEW_FILE" 2>/dev/null
         fi
         
         # Clean up
         rm -f "$MENUDIR/.recording_pid" "$MENUDIR/.recording_file" "$MENUDIR/.recording_start"
     fi
 fi
-"""
+""".format(
+            device=device,
+            recording_dir=self.recording_dir,
+            menu_dir=self.menu_dir
+        )
         try:
             with open(self.silentjack_script, 'w') as f:
                 f.write(script_content)
             os.chmod(self.silentjack_script, 0o755)
+            logger.info(f"Created silentjack script: {self.silentjack_script}")
             return True
+        except OSError as e:
+            logger.error(f"OS error creating silentjack script: {e}")
+            return False
         except Exception as e:
-            print(f"Error creating silentjack script: {e}")
+            logger.error(f"Unexpected error creating silentjack script: {e}", exc_info=True)
             return False
     
     def check_silentjack_recording(self):

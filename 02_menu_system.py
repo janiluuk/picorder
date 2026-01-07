@@ -28,15 +28,28 @@ def _1():
     global current_device_index, config, audio_device, audio_devices
     # Refresh device list in case devices changed
     audio_devices = get_audio_devices()
+    
+    # Ensure we have at least the "None" option
+    if len(audio_devices) == 0:
+        audio_devices = [("", "None (Disabled)")]
+        current_device_index = 0
+    
+    # Cycle to next device
     current_device_index = (current_device_index + 1) % len(audio_devices)
     audio_device = audio_devices[current_device_index][0]
     config["audio_device"] = audio_device
     save_config(config)
     
-    # If "None" selected, disable auto-record
-    if audio_device == "":
+    # If "None" selected or device invalid, disable auto-record and stop any recordings
+    if audio_device == "" or not is_audio_device_valid(audio_device):
         config["auto_record"] = False
         save_config(config)
+        # Stop silentjack if running
+        stop_silentjack()
+        # Stop any active recording (thread-safe check)
+        import menu_settings as ms
+        if ms._recording_manager.is_recording:
+            stop_recording()
     
     # Update display
     update_display()
@@ -81,6 +94,11 @@ def update_display():
     
     # Refresh device list
     audio_devices = get_audio_devices()
+    
+    # Ensure we have at least the "None" option
+    if len(audio_devices) == 0:
+        audio_devices = [("", "None (Disabled)")]
+    
     # Ensure index is valid
     if current_device_index >= len(audio_devices):
         current_device_index = 0
@@ -99,9 +117,14 @@ def update_display():
     auto_record_enabled = config.get("auto_record", False)
     
     # Auto-record can only be ON if valid device is selected
-    if audio_device == "" or not is_audio_device_valid(audio_device):
+    device_valid = audio_device and is_audio_device_valid(audio_device)
+    if not device_valid:
         auto_record_enabled = False
         auto_status = "OFF (No Device)"
+        # Update config if it was enabled
+        if config.get("auto_record", False):
+            config["auto_record"] = False
+            save_config(config)
     else:
         auto_status = "ON" if auto_record_enabled else "OFF"
     
