@@ -17,9 +17,12 @@ try:
 except ImportError:
     GPIO_AVAILABLE = False
 
-# Setup logging
+# Setup logging - adapt path based on platform
 try:
-    LOG_DIR = Path("/home/pi/logs")
+    if os.path.exists("/home/pi"):
+        LOG_DIR = Path("/home/pi/logs")
+    else:
+        LOG_DIR = Path.home() / "logs"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     LOG_FILE = LOG_DIR / "picorder.log"
     handlers = [
@@ -27,7 +30,7 @@ try:
         logging.StreamHandler()
     ]
 except (OSError, PermissionError):
-    # Fallback for test environments or when /home/pi/logs can't be created
+    # Fallback for test environments or when logs directory can't be created
     LOG_DIR = Path.cwd() / "logs"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     LOG_FILE = LOG_DIR / "picorder.log"
@@ -43,10 +46,35 @@ logger = logging.getLogger(__name__)
 if not GPIO_AVAILABLE:
     logger.warning("RPi.GPIO not available - GPIO features disabled")
 
-# Hardware
-SCREEN_DEVICE = "/dev/fb1"
-TOUCH_DEVICE = "/dev/input/touchscreen"
-MOUSE_DRIVER = "TSLIB"
+# Detect platform (Raspberry Pi vs Desktop)
+def is_raspberry_pi():
+    """Detect if running on Raspberry Pi"""
+    try:
+        with open('/proc/cpuinfo', 'r') as f:
+            cpuinfo = f.read()
+            return 'Raspberry Pi' in cpuinfo or 'BCM' in cpuinfo
+    except (OSError, IOError):
+        return False
+
+IS_RASPBERRY_PI = is_raspberry_pi()
+
+# Hardware configuration - adapt based on platform
+if IS_RASPBERRY_PI:
+    # Raspberry Pi configuration (TFT framebuffer)
+    SCREEN_DEVICE = "/dev/fb1"
+    TOUCH_DEVICE = "/dev/input/touchscreen"
+    MOUSE_DRIVER = "TSLIB"
+    FRAMEBUFFER = "/dev/fb1"
+    # Use /home/pi paths on Raspberry Pi
+    BASE_DIR = Path("/home/pi")
+else:
+    # Desktop configuration (X11)
+    SCREEN_DEVICE = None  # Use default X11 display
+    TOUCH_DEVICE = None  # Use default mouse
+    MOUSE_DRIVER = None  # Use default mouse driver
+    FRAMEBUFFER = None
+    # Use user's home directory on desktop
+    BASE_DIR = Path.home()
 
 PAGE_01 = "01_menu_run.py"
 PAGE_02 = "02_menu_system.py"
@@ -54,10 +82,9 @@ PAGE_03 = "03_menu_services.py"
 PAGE_04 = "04_menu_stats.py"
 SCREEN_OFF = "menu_screenoff.py"
 
-# bash export
-FRAMEBUFFER = "/dev/fb1"
-MENUDIR = Path("/home/pi/picorder/")
-RECORDING_DIR = Path("/home/pi/recordings/")
+# Directory configuration
+MENUDIR = BASE_DIR / "picorder"
+RECORDING_DIR = BASE_DIR / "recordings"
 CONFIG_FILE = MENUDIR / "config.json"
 startpage = PAGE_01
 
@@ -460,11 +487,16 @@ def should_screen_timeout():
     Screen times out after SCREEN_TIMEOUT seconds of inactivity, but:
     - Never times out while recording (manual or auto)
     - Always checks current state (thread-safe)
+    - On desktop, screen timeout is disabled (no GPIO backlight control)
     
     Returns:
         bool: True if screen should timeout, False otherwise
     """
     global last_activity_time
+    # On desktop, don't timeout (no backlight to control)
+    if not IS_RASPBERRY_PI:
+        return False
+    
     # Use RecordingManager to check recording state (thread-safe)
     # Screen should never timeout during active recording
     if _recording_manager.is_recording:
@@ -476,7 +508,7 @@ def should_screen_timeout():
 
 # Turn screen on
 def screen_on():
-    if GPIO_AVAILABLE:
+    if GPIO_AVAILABLE and IS_RASPBERRY_PI:
         try:
             GPIO.setmode(GPIO.BCM)
             GPIO.setup(18, GPIO.OUT)
@@ -488,12 +520,13 @@ def screen_on():
             logger.debug("Screen turned on")
         except Exception as e:
             logger.error(f"Error turning screen on: {e}")
+    # On desktop, screen_on just updates activity (no GPIO control)
     update_activity()
     go_to_page(PAGE_01)
 
 # Turn screen off
 def screen_off():
-    if GPIO_AVAILABLE:
+    if GPIO_AVAILABLE and IS_RASPBERRY_PI:
         try:
             GPIO.setmode(GPIO.BCM)
             GPIO.setup(18, GPIO.OUT)
@@ -508,6 +541,7 @@ def screen_off():
             logger.debug("Screen turned off")
         except Exception as e:
             logger.error(f"Error turning screen off: {e}")
+    # On desktop, screen_off is a no-op (screen stays visible)
 
 def check_service(srvc):
     if not srvc:
@@ -748,22 +782,32 @@ def button(number, _1, _2, _3, _4, _5, _6):
         return
 
 def init(draw=True):
-    # init os environment
-    os.environ["SDL_FBDEV"] = SCREEN_DEVICE
-    os.environ["SDL_MOUSEDEV"] = TOUCH_DEVICE
-    os.environ["SDL_MOUSEDRV"] = MOUSE_DRIVER
-
-    # Check if display device exists
-    if not os.path.exists(SCREEN_DEVICE) and not os.environ.get("DISPLAY"):
-        logger.error(f"Display device {SCREEN_DEVICE} not found and no DISPLAY environment variable set.")
-        logger.error("This application requires a physical display (TFT screen) or X11 forwarding.")
-        raise RuntimeError(f"Display device {SCREEN_DEVICE} not available")
+    # init os environment - only set for Raspberry Pi framebuffer mode
+    if IS_RASPBERRY_PI:
+        if SCREEN_DEVICE:
+            os.environ["SDL_FBDEV"] = SCREEN_DEVICE
+        if TOUCH_DEVICE:
+            os.environ["SDL_MOUSEDEV"] = TOUCH_DEVICE
+        if MOUSE_DRIVER:
+            os.environ["SDL_MOUSEDRV"] = MOUSE_DRIVER
+        
+        # Check if display device exists on Raspberry Pi
+        if SCREEN_DEVICE and not os.path.exists(SCREEN_DEVICE) and not os.environ.get("DISPLAY"):
+            logger.error(f"Display device {SCREEN_DEVICE} not found and no DISPLAY environment variable set.")
+            logger.error("This application requires a physical display (TFT screen) or X11 forwarding.")
+            raise RuntimeError(f"Display device {SCREEN_DEVICE} not available")
+    else:
+        # Desktop mode - check for X11 display
+        if not os.environ.get("DISPLAY"):
+            logger.error("No DISPLAY environment variable set. This application requires X11.")
+            raise RuntimeError("No X11 display available")
 
     try:
-        # Initialize pygame modules individually (to avoid ALSA errors) and hide mouse
+        # Initialize pygame modules individually (to avoid ALSA errors)
         pygame.font.init()
         pygame.display.init()
-        pygame.mouse.set_visible(0)
+        # Hide mouse cursor on Raspberry Pi, show on desktop
+        pygame.mouse.set_visible(0 if IS_RASPBERRY_PI else 1)
 
         if draw:
             # Customise layout
@@ -849,7 +893,9 @@ def main(buttons=[], update_callback=None):
         if should_screen_timeout():
             screen_off()
             # Wait for touch to wake up screen
-            # Keep checking for wake-up events and recording state (screen should wake if recording starts)
+            # Keep checking for wake-up events, recording state, and audio input
+            # Screen will wake if: touched, recording starts, or audio input detected
+            audio_check_counter = 0  # Check audio every few iterations to reduce CPU usage
             while should_screen_timeout():
                 # Check events without blocking - allows immediate wake on touch
                 for event in pygame.event.get():
@@ -857,6 +903,30 @@ def main(buttons=[], update_callback=None):
                         screen_on()
                         update_activity()  # Reset timeout timer
                         break
+                
+                # Check for audio input every 4 iterations (every ~2 seconds)
+                # This reduces CPU usage while still being responsive to audio
+                audio_check_counter += 1
+                if audio_check_counter >= 4:
+                    audio_check_counter = 0
+                    try:
+                        # Get configured audio device
+                        config = load_config()
+                        audio_device = config.get("audio_device", "")
+                        
+                        # Only check audio if device is configured and valid
+                        if audio_device and is_audio_device_valid(audio_device):
+                            # Check for audio input (threshold: 0.02 = 2% of max level)
+                            audio_level = get_audio_level(audio_device, sample_duration=0.05)
+                            if audio_level > 0.02:  # Audio detected above threshold
+                                logger.debug(f"Audio input detected (level: {audio_level:.3f}), waking screen")
+                                screen_on()
+                                update_activity()  # Reset timeout timer
+                                break
+                    except Exception as e:
+                        # Don't let audio detection errors prevent screen from working
+                        logger.debug(f"Error checking audio input: {e}")
+                
                 # Short sleep to reduce CPU usage while screen is off
                 # If recording starts while screen is off, it will wake automatically
                 time.sleep(0.5)

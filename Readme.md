@@ -1,10 +1,12 @@
 # Picorder - a Raspberry Pi TFT Audio Recorder
 
-A Raspberry Pi menu system for audio recording with manual and automatic modes, compatible with Waveshare 3.5-inch TFT touch display.
+A Raspberry Pi menu system for audio recording with manual and automatic modes, compatible with Waveshare 3.5-inch TFT touch display. Also works on Linux desktop systems using pygame with X11.
 
 ## Hardware Compatibility ##
 
-This project is compatible with the **Waveshare 3.5-inch Raspberry Pi LCD** display. Built for Raspberry Pi devices. You can use device you want for recording. 
+This project is compatible with the **Waveshare 3.5-inch Raspberry Pi LCD** display. Built for Raspberry Pi devices. You can use device you want for recording.
+
+**Desktop Support:** The application can also run on Linux desktop systems using pygame with X11 display. Use the `menu_desktop.sh` script to launch it on your desktop. 
 
 ## Setup ##
 
@@ -40,6 +42,28 @@ This project is compatible with the **Waveshare 3.5-inch Raspberry Pi LCD** disp
    ```bash
    sudo ./install.sh uninstall
    ```
+
+## Desktop Usage ##
+
+To run the menu on a Linux desktop system:
+
+1. **Install dependencies:**
+   ```bash
+   pip3 install pygame
+   ```
+
+2. **Run the desktop launcher:**
+   ```bash
+   ./menu_desktop.sh
+   ```
+
+   The application will:
+   - Automatically detect it's running on desktop (not Raspberry Pi)
+   - Use X11 display instead of framebuffer
+   - Use mouse input instead of touchscreen
+   - Store recordings in `~/recordings/` instead of `/home/pi/recordings/`
+   - Store config in `~/picorder/config.json` instead of `/home/pi/picorder/config.json`
+   - Disable screen timeout (no GPIO backlight control on desktop)
 
 ## Features ##
 
@@ -102,7 +126,9 @@ Access the settings menu by pressing Button 4 from the main menu.
 - Screen automatically turns off after 30 seconds of inactivity
 - Screen stays on while recording (manual or auto)
 - Touch the screen to wake it up when it's off
-- Screen will also wake up automatically if a recording starts while it's off
+- Screen will also wake up automatically if:
+  - A recording starts while it's off
+  - Audio input is detected (even when not recording)
 
 ## Recordings ##
 
