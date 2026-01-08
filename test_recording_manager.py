@@ -62,7 +62,7 @@ class TestRecordingManager(unittest.TestCase):
 
     def test_start_recording_success(self):
         """Test successful recording start"""
-        with patch('subprocess.Popen') as mock_popen:
+        with patch('recording_manager.Popen') as mock_popen:
             mock_process = MagicMock()
             mock_popen.return_value = mock_process
             
@@ -75,7 +75,7 @@ class TestRecordingManager(unittest.TestCase):
 
     def test_start_recording_already_recording(self):
         """Test that starting recording when already recording returns False"""
-        with patch('subprocess.Popen') as mock_popen:
+        with patch('recording_manager.Popen') as mock_popen:
             mock_process = MagicMock()
             mock_popen.return_value = mock_process
             
@@ -99,7 +99,7 @@ class TestRecordingManager(unittest.TestCase):
 
     def test_stop_recording_manual(self):
         """Test stopping a manual recording"""
-        with patch('subprocess.Popen') as mock_popen:
+        with patch('recording_manager.Popen') as mock_popen:
             mock_process = MagicMock()
             mock_process.poll.return_value = None  # Process is running
             mock_popen.return_value = mock_process
@@ -133,7 +133,7 @@ class TestRecordingManager(unittest.TestCase):
 
     def test_get_recording_status_manual(self):
         """Test getting status for manual recording"""
-        with patch('subprocess.Popen') as mock_popen:
+        with patch('recording_manager.Popen') as mock_popen:
             mock_process = MagicMock()
             mock_popen.return_value = mock_process
             
@@ -146,26 +146,30 @@ class TestRecordingManager(unittest.TestCase):
 
     def test_thread_safety_concurrent_start(self):
         """Test thread safety with concurrent start attempts"""
-        results = []
-        
-        def start_recording():
-            result = self.manager.start_recording("plughw:0,0", mode="manual")
-            results.append(result)
-        
-        # Start multiple threads trying to record
-        threads = [threading.Thread(target=start_recording) for _ in range(5)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        
-        # Only one should succeed
-        self.assertEqual(sum(results), 1)
-        self.assertTrue(self.manager.is_recording)
+        with patch('recording_manager.Popen') as mock_popen:
+            mock_process = MagicMock()
+            mock_popen.return_value = mock_process
+            
+            results = []
+            
+            def start_recording():
+                result = self.manager.start_recording("plughw:0,0", mode="manual")
+                results.append(result)
+            
+            # Start multiple threads trying to record
+            threads = [threading.Thread(target=start_recording) for _ in range(5)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            
+            # Only one should succeed
+            self.assertEqual(sum(results), 1)
+            self.assertTrue(self.manager.is_recording)
 
     def test_thread_safety_status_access(self):
         """Test thread safety when accessing status from multiple threads"""
-        with patch('subprocess.Popen') as mock_popen:
+        with patch('recording_manager.Popen') as mock_popen:
             mock_process = MagicMock()
             mock_popen.return_value = mock_process
             
@@ -243,7 +247,7 @@ class TestRecordingManager(unittest.TestCase):
 
     def test_start_silentjack(self):
         """Test starting silentjack"""
-        with patch('subprocess.Popen') as mock_popen:
+        with patch('recording_manager.Popen') as mock_popen:
             mock_process = MagicMock()
             mock_popen.return_value = mock_process
             
@@ -254,7 +258,7 @@ class TestRecordingManager(unittest.TestCase):
 
     def test_stop_silentjack(self):
         """Test stopping silentjack"""
-        with patch('subprocess.Popen') as mock_popen:
+        with patch('recording_manager.Popen') as mock_popen:
             mock_process = MagicMock()
             mock_process.poll.return_value = None  # Process is running
             mock_popen.return_value = mock_process
@@ -329,7 +333,7 @@ class TestRecordingManagerEdgeCases(unittest.TestCase):
 
     def test_stop_recording_process_timeout(self):
         """Test handling of process that doesn't terminate"""
-        with patch('subprocess.Popen') as mock_popen:
+        with patch('recording_manager.Popen') as mock_popen:
             mock_process = MagicMock()
             mock_process.wait.side_effect = [TimeoutError(), None]  # First wait times out
             mock_popen.return_value = mock_process

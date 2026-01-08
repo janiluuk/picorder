@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 # Constants
 PROCESS_TERMINATE_TIMEOUT = 2  # seconds
 PROCESS_KILL_DELAY = 0.5  # seconds
+MIN_FREE_DISK_SPACE_GB = 0.1  # Minimum free disk space required for recording (100MB)
 
 
 class RecordingManager:
@@ -72,7 +73,7 @@ class RecordingManager:
                 try:
                     stat = shutil.disk_usage(self.recording_dir)
                     free_gb = stat.free / (1024**3)
-                    if free_gb < 0.1:  # Less than 100MB free
+                    if free_gb < MIN_FREE_DISK_SPACE_GB:
                         logger.error("Insufficient disk space for recording")
                         return False
                 except OSError as e:
