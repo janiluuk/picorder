@@ -6,7 +6,8 @@ import os
 import time
 import threading
 import logging
-from subprocess import Popen, PIPE
+import subprocess
+from subprocess import Popen, PIPE, TimeoutExpired
 from pathlib import Path
 
 # Setup logging
@@ -37,6 +38,13 @@ class RecordingManager:
         self._recording_filename = None
         self._recording_mode = None  # "auto" or "manual"
         self._is_recording = False
+        self._starting_recording = False  # Flag to prevent concurrent start attempts
+        
+        # Cached state for non-blocking reads (updated atomically with lock)
+        # These are updated whenever _is_recording changes, allowing fast reads without lock
+        self._cached_is_recording = False
+        self._cached_mode = None
+        self._cached_start_time = None
         
         self.silentjack_script = self.menu_dir / "silentjack_monitor.sh"
         self.recording_pid_file = self.menu_dir / ".recording_pid"
@@ -61,101 +69,310 @@ class RecordingManager:
         with self._lock:
             return self._recording_start_time
     
+    def get_recording_state(self, blocking=True):
+        """Get all recording state in one lock acquisition (faster than multiple property calls)
+        
+        Args:
+            blocking: If False, returns cached state if lock is held (non-blocking)
+        """
+        if blocking:
+            with self._lock:
+                # Update cache while we have the lock
+                self._cached_is_recording = self._is_recording
+                self._cached_mode = self._recording_mode
+                self._cached_start_time = self._recording_start_time
+                return {
+                    'is_recording': self._is_recording,
+                    'mode': self._recording_mode,
+                    'start_time': self._recording_start_time
+                }
+        else:
+            # Non-blocking: try to acquire lock, return cached state if held
+            if self._lock.acquire(blocking=False):
+                try:
+                    # Update cache while we have the lock
+                    self._cached_is_recording = self._is_recording
+                    self._cached_mode = self._recording_mode
+                    self._cached_start_time = self._recording_start_time
+                    return {
+                        'is_recording': self._is_recording,
+                        'mode': self._recording_mode,
+                        'start_time': self._recording_start_time
+                    }
+                finally:
+                    self._lock.release()
+            else:
+                # Lock is held - return cached state (may be slightly stale but won't block)
+                return {
+                    'is_recording': self._cached_is_recording,
+                    'mode': self._cached_mode,
+                    'start_time': self._cached_start_time
+                }
+    
+    def _kill_zombie_arecord_processes(self, device):
+        """Kill any zombie arecord processes that might be holding the device"""
+        # Use a very short timeout to avoid blocking the UI
+        # If cleanup takes too long, just skip it and try anyway
+        try:
+            import shlex
+            # Escape device for shell safety
+            device_escaped = shlex.quote(device)
+            cmd = f"pgrep -f 'arecord.*-D.*{device_escaped}'"
+            # Use very short timeout - if it takes longer, skip cleanup
+            # Reduced to 0.05s to minimize blocking
+            result = subprocess.run(cmd, shell=True, capture_output=True, timeout=0.05, text=True)
+            if result.returncode == 0 and result.stdout.strip():
+                pids = result.stdout.strip().split('\n')
+                logger.warning(f"Found {len(pids)} zombie arecord process(es) for device {device}, killing...")
+                # Kill all processes immediately without waiting
+                for pid_str in pids:
+                    try:
+                        pid = int(pid_str.strip())
+                        # Send SIGKILL immediately (no SIGTERM, no wait)
+                        try:
+                            os.kill(pid, 9)  # SIGKILL - immediate kill
+                        except ProcessLookupError:
+                            pass  # Already dead
+                        except PermissionError:
+                            pass  # Can't kill (might be different user)
+                    except (ValueError, ProcessLookupError, PermissionError):
+                        pass  # PID invalid or already dead
+                # No sleep - device should be released immediately after SIGKILL
+        except subprocess.TimeoutExpired:
+            # Timeout is OK - just continue without cleanup
+            logger.debug("Timeout checking for zombie processes, continuing...")
+        except Exception as e:
+            logger.debug(f"Error killing zombie arecord processes: {e}")
+    
     def start_recording(self, device, mode="manual"):
         """Start audio recording"""
         import shutil
         with self._lock:
-            if self._is_recording:
+            # Check if already recording or in the process of starting
+            if self._is_recording or self._starting_recording:
                 return False
             
+            # Check disk space before recording (quick check)
             try:
-                # Check disk space before recording
-                try:
-                    stat = shutil.disk_usage(self.recording_dir)
-                    free_gb = stat.free / (1024**3)
-                    if free_gb < MIN_FREE_DISK_SPACE_GB:
-                        logger.error("Insufficient disk space for recording")
-                        return False
-                except OSError as e:
-                    logger.error(f"Error checking disk space: {e}")
+                stat = shutil.disk_usage(self.recording_dir)
+                free_gb = stat.free / (1024**3)
+                if free_gb < MIN_FREE_DISK_SPACE_GB:
+                    logger.error("Insufficient disk space for recording")
                     return False
+            except OSError as e:
+                logger.error(f"Error checking disk space: {e}")
+                return False
+            
+            # Generate filename with timestamp
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            recording_filename = self.recording_dir / f"recording_{timestamp}.wav"
+            
+            # Prepare command
+            cmd = ["arecord", "-D", device, "-f", "cd", "-t", "wav", str(recording_filename)]
+            
+            # Set flag to prevent concurrent start attempts before releasing lock
+            self._starting_recording = True
+        
+        # Release lock before starting process (don't do cleanup upfront - only if needed)
+        # Note: _starting_recording flag is set to prevent race conditions
+        try:
+            # Start arecord process (non-blocking)
+            recording_process = Popen(cmd, stdout=PIPE, stderr=PIPE)
+            
+            # Give it a very brief moment to fail if device is invalid or busy (non-blocking check)
+            # This allows arecord to fail immediately if device doesn't exist or is busy
+            time.sleep(0.005)  # 5ms - minimal delay, just enough for immediate failures
+            
+            # Check if process already failed (non-blocking poll)
+            return_code = recording_process.poll()
+            if return_code is not None:
+                # Process already failed - read error message
+                stderr_output = b""
+                try:
+                    # Try to read stderr (non-blocking, may fail if pipe closed)
+                    import select
+                    if select.select([recording_process.stderr], [], [], 0)[0]:
+                        stderr_output = recording_process.stderr.read(1024)
+                except:
+                    pass
                 
-                # Generate filename with timestamp
-                timestamp = time.strftime("%Y%m%d_%H%M%S")
-                self._recording_filename = self.recording_dir / f"recording_{timestamp}.wav"
+                error_msg = stderr_output.decode('utf-8', errors='ignore').strip()
                 
-                # Start arecord process
-                cmd = ["arecord", "-D", device, "-f", "cd", "-t", "wav", str(self._recording_filename)]
-                self._recording_process = Popen(cmd, stdout=PIPE, stderr=PIPE)
+                # Check if it's a "device busy" error - try cleanup and retry once
+                if "Device or resource busy" in error_msg or "device busy" in error_msg.lower():
+                    logger.warning(f"Device busy, attempting cleanup and retry...")
+                    # Clean up the failed process first
+                    try:
+                        recording_process.terminate()
+                        try:
+                            recording_process.wait(timeout=0.1)
+                        except:
+                            recording_process.kill()
+                    except:
+                        pass
+                    
+                    # Only now do we try to kill zombie processes (lazy cleanup)
+                    # Use a very short timeout to avoid blocking
+                    self._kill_zombie_arecord_processes(device)
+                    time.sleep(0.02)  # Reduced from 0.05s - minimal delay (20ms)
+                    
+                    # Try once more
+                    recording_process = Popen(cmd, stdout=PIPE, stderr=PIPE)
+                    time.sleep(0.005)
+                    return_code = recording_process.poll()
+                    if return_code is not None:
+                        # Still failed after retry
+                        stderr_output = b""
+                        try:
+                            import select
+                            if select.select([recording_process.stderr], [], [], 0)[0]:
+                                stderr_output = recording_process.stderr.read(1024)
+                        except:
+                            pass
+                        error_msg = stderr_output.decode('utf-8', errors='ignore').strip()
+                        logger.error(f"arecord failed after retry (exit code {return_code}): {error_msg}")
+                        try:
+                            recording_process.terminate()
+                            try:
+                                recording_process.wait(timeout=0.1)
+                            except:
+                                recording_process.kill()
+                        except:
+                            pass
+                        # Clear the starting flag on failure
+                        with self._lock:
+                            self._starting_recording = False
+                        return False
+                    # Retry succeeded - fall through to success case
+                else:
+                    # Other error (not device busy)
+                    logger.error(f"arecord failed immediately (exit code {return_code}): {error_msg}")
+                    try:
+                        recording_process.terminate()
+                        try:
+                            recording_process.wait(timeout=0.5)
+                        except:
+                            recording_process.kill()
+                    except:
+                        pass
+                    # Clear the starting flag on failure
+                    with self._lock:
+                        self._starting_recording = False
+                    return False
+            
+            # Process started successfully - update state (re-acquire lock)
+            with self._lock:
+                self._recording_process = recording_process
+                self._recording_filename = recording_filename
                 self._recording_start_time = time.time()
                 self._recording_mode = mode
                 self._is_recording = True
+                self._cached_is_recording = True
+                self._cached_mode = mode
+                self._cached_start_time = self._recording_start_time
+                self._starting_recording = False  # Clear the starting flag
                 logger.info(f"Started {mode} recording: {self._recording_filename}")
                 return True
-            except OSError as e:
-                logger.error(f"OS error starting recording: {e}")
-                return False
-            except Exception as e:
-                logger.error(f"Unexpected error starting recording: {e}", exc_info=True)
-                return False
+                
+        except OSError as e:
+            logger.error(f"OS error starting recording: {e}")
+            # Clear the starting flag on error
+            with self._lock:
+                self._starting_recording = False
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error starting recording: {e}", exc_info=True)
+            # Clear the starting flag on error
+            with self._lock:
+                self._starting_recording = False
+            return False
     
     def stop_recording(self):
         """Stop audio recording and rename file with duration"""
+        # Get process and state while holding lock (quick operations only)
+        recording_process = None
+        recording_filename = None
+        recording_start_time = None
+        recording_mode = None
+        needs_silentjack_stop = False
+        
         with self._lock:
             if not self._is_recording:
                 return False
             
-            success = True
+            # Capture state for operations outside the lock
+            recording_process = self._recording_process
+            recording_filename = self._recording_filename
+            recording_start_time = self._recording_start_time
+            recording_mode = self._recording_mode
             
-            # Handle silentjack recordings
-            if self._recording_mode == "auto" and self.recording_pid_file.exists():
-                success = self._stop_silentjack_recording()
+            # Check if we need to stop silentjack (quick check)
+            needs_silentjack_stop = (recording_mode == "auto" and self.recording_pid_file.exists())
             
-            # Stop our own recording process
-            if self._recording_process is not None:
-                try:
-                    self._recording_process.terminate()
-                    self._recording_process.wait(timeout=PROCESS_TERMINATE_TIMEOUT)
-                    logger.debug("Recording process terminated gracefully")
-                except TimeoutError:
-                    logger.warning("Recording process did not terminate, killing...")
-                    try:
-                        self._recording_process.kill()
-                        self._recording_process.wait()
-                    except Exception as e:
-                        logger.error(f"Error killing recording process: {e}")
-                except Exception as e:
-                    logger.error(f"Error terminating recording process: {e}")
-                
-                # Rename file with duration
-                if self._recording_filename and self._recording_filename.exists():
-                    duration = int(time.time() - self._recording_start_time)
-                    new_filename = self._rename_with_duration(self._recording_filename, duration)
-                    if new_filename:
-                        try:
-                            self._recording_filename.rename(new_filename)
-                            logger.info(f"Renamed recording file to: {new_filename}")
-                        except OSError as e:
-                            logger.error(f"OS error renaming file {self._recording_filename}: {e}")
-                        except Exception as e:
-                            logger.error(f"Unexpected error renaming file: {e}", exc_info=True)
-                
-                # Close file handles before clearing
-                if self._recording_process is not None:
-                    try:
-                        if self._recording_process.stdout:
-                            self._recording_process.stdout.close()
-                        if self._recording_process.stderr:
-                            self._recording_process.stderr.close()
-                    except Exception:
-                        pass
-                self._recording_process = None
-                self._recording_filename = None
-            
+            # Clear state immediately (before waiting for process)
+            self._recording_process = None
+            self._recording_filename = None
             self._recording_start_time = None
             self._recording_mode = None
             self._is_recording = False
-            return success
+            self._cached_is_recording = False
+            self._cached_mode = None
+            self._cached_start_time = None
+        
+        # Release lock before blocking operations
+        
+        success = True
+        
+        # Handle silentjack recordings (outside lock)
+        if needs_silentjack_stop:
+            success = self._stop_silentjack_recording()
+        
+        # Stop our own recording process (outside lock to avoid blocking)
+        if recording_process is not None:
+            try:
+                recording_process.terminate()
+                recording_process.wait(timeout=PROCESS_TERMINATE_TIMEOUT)
+                logger.debug("Recording process terminated gracefully")
+            except TimeoutExpired:
+                logger.warning("Recording process did not terminate, killing...")
+                try:
+                    recording_process.kill()
+                    recording_process.wait(timeout=PROCESS_KILL_DELAY)
+                except TimeoutExpired:
+                    logger.warning("Process did not die after kill, continuing...")
+                except Exception as e:
+                    logger.error(f"Error killing recording process: {e}")
+            except Exception as e:
+                logger.error(f"Error terminating recording process: {e}")
+            
+            # Rename file with duration (outside lock)
+            if recording_filename and recording_filename.exists():
+                if recording_start_time:
+                    duration = int(time.time() - recording_start_time)
+                    new_filename = self._rename_with_duration(recording_filename, duration)
+                    if new_filename:
+                        try:
+                            recording_filename.rename(new_filename)
+                            logger.info(f"Renamed recording file to: {new_filename}")
+                        except OSError as e:
+                            logger.error(f"OS error renaming file {recording_filename}: {e}")
+                        except Exception as e:
+                            logger.error(f"Unexpected error renaming file: {e}", exc_info=True)
+            
+            # Close file handles (outside lock)
+            try:
+                if recording_process.stdout:
+                    recording_process.stdout.close()
+                if recording_process.stderr:
+                    recording_process.stderr.close()
+            except Exception:
+                pass
+        
+        # Give device a brief moment to be fully released after stopping
+        # This helps prevent "device busy" errors when starting a new recording immediately
+        # Reduced delay to improve responsiveness
+        time.sleep(0.05)  # Reduced from 0.2s to 0.05s
+        return success
     
     def _stop_silentjack_recording(self):
         """Stop a silentjack-initiated recording"""
@@ -335,11 +552,13 @@ class RecordingManager:
                     self._silentjack_process.terminate()
                     self._silentjack_process.wait(timeout=PROCESS_TERMINATE_TIMEOUT)
                     logger.debug("Silentjack process terminated gracefully")
-                except TimeoutError:
+                except TimeoutExpired:
                     logger.warning("Silentjack process did not terminate, killing...")
                     try:
                         self._silentjack_process.kill()
-                        self._silentjack_process.wait()
+                        self._silentjack_process.wait(timeout=PROCESS_KILL_DELAY)
+                    except TimeoutExpired:
+                        logger.warning("Silentjack process did not die after kill, continuing...")
                     except Exception as e:
                         logger.error(f"Error killing silentjack process: {e}")
                 except Exception as e:

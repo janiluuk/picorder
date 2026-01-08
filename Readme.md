@@ -4,7 +4,7 @@ A Raspberry Pi menu system for audio recording with manual and automatic modes, 
 
 ## Hardware Compatibility ##
 
-This project is compatible with the **Waveshare 3.5-inch Raspberry Pi LCD** display. Built for Raspberry Pi devices. You can use device you want for recording.
+This project is compatible with the **Waveshare 3.5-inch Raspberry Pi LCD** display. Built for Raspberry Pi devices. You can use device you want for recording. 
 
 **Desktop Support:** The application can also run on Linux desktop systems using pygame with X11 display. Use the `menu_desktop.sh` script to launch it on your desktop. 
 

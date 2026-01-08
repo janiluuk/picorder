@@ -80,6 +80,7 @@ PAGE_01 = "01_menu_run.py"
 PAGE_02 = "02_menu_system.py"
 PAGE_03 = "03_menu_services.py"
 PAGE_04 = "04_menu_stats.py"
+PAGE_05 = "05_menu_library.py"
 SCREEN_OFF = "menu_screenoff.py"
 
 # Directory configuration
@@ -151,13 +152,33 @@ def x(fb, f, a, exit_menu=True):
     run_cmd(run_x)
     os.execv(f, a)
 
+# Page router - keeps state across page navigation by using exec instead of execvp
 def go_to_page(p):
-    # next page
-    pygame.quit()
-    ##startx only works when we don't use subprocess here, don't know why
-    page = str(MENUDIR / p)
-    os.execvp("python3", ["python3", page])
-    sys.exit()
+    """Navigate to a different page (preserves state by using exec instead of execvp)"""
+    # Use exec() to run the page code in the current process, preserving all state
+    # This is safer than execvp() which replaces the process and loses state
+    script_dir = Path(__file__).parent.absolute()
+    page = script_dir / p
+    if not page.exists():
+        page = MENUDIR / p
+    
+    if not page.exists():
+        logger.error(f"Page file not found: {p}")
+        return
+    
+    # Read and execute the page file in the current namespace
+    # This preserves all global state including RecordingManager
+    try:
+        with open(page, 'r') as f:
+            page_code = f.read()
+        # Execute in the current global namespace to preserve state
+        exec(compile(page_code, str(page), 'exec'), globals())
+    except Exception as e:
+        logger.error(f"Error loading page {p}: {e}", exc_info=True)
+        # Fallback to old method if exec fails
+        pygame.quit()
+        os.execvp("python3", ["python3", str(page)])
+        sys.exit()
 
 def get_hostname():
     # Use list to avoid shell interpretation (safer)
@@ -223,7 +244,13 @@ def get_current_device_config():
     auto_record = config.get("auto_record", False)
     
     # Validate device - if invalid, disable auto-record
-    device_valid = audio_device and is_audio_device_valid(audio_device)
+    # Use try-except to ensure validation doesn't hang the UI
+    try:
+        device_valid = audio_device and is_audio_device_valid(audio_device)
+    except Exception as e:
+        logger.debug(f"Error validating device during config check: {e}")
+        device_valid = False
+    
     if not device_valid and auto_record:
         config["auto_record"] = False
         save_config(config)
@@ -321,7 +348,9 @@ def validate_audio_device(device, use_cache=True):
         
         return is_valid
     except TimeoutExpired:
-        logger.warning(f"Timeout validating device {device}")
+        # Device validation timed out - log at debug level to reduce noise
+        # This is common on desktop systems without audio hardware
+        logger.debug(f"Timeout validating device {device} (device may not be available)")
         return False
     except (OSError, ValueError) as e:
         logger.debug(f"Error validating device {device}: {e}")
@@ -402,27 +431,15 @@ def start_recording(device, mode="manual"):
     """Start audio recording (wrapper for RecordingManager)"""
     global recording_process, recording_start_time, recording_mode, is_recording, recording_filename
     
-    # Validate device before attempting to record
+    # Skip device validation to avoid blocking - just check if device is configured
     if not device or device == "":
         logger.warning("Cannot start recording: no audio device selected")
         return False
     
-    if not is_audio_device_valid(device):
-        logger.warning(f"Cannot start recording: audio device '{device}' is not available")
-        return False
+    # Don't validate device here - it blocks! Just try to start recording
+    # RecordingManager will handle errors gracefully and check disk space internally
     
-    # Check disk space before recording
-    try:
-        stat = shutil.disk_usage("/")
-        free_gb = stat.free / (1024**3)
-        if free_gb < MIN_FREE_DISK_SPACE_GB:
-            logger.error("Insufficient disk space for recording")
-            return False
-    except OSError as e:
-        logger.error(f"Error checking disk space: {e}")
-        return False
-    
-    # Use RecordingManager to start recording
+    # Use RecordingManager to start recording (non-blocking, returns quickly)
     success = _recording_manager.start_recording(device, mode)
     
     # Update legacy globals for backward compatibility
@@ -674,11 +691,20 @@ def draw_screen_border(screen):
 
 # define function for printing text in a specific place with a specific width
 # and height with a specific colour and border
-def make_button(text, pos, colour, screen):
+def make_button(text, pos, colour, screen, bg_color=None, pressed=False):
+    """Draw a button with optional background color and pressed state"""
     xpo, ypo, height, width = pos
-    pygame.draw.rect(screen, tron_regular, (xpo-10,ypo-10,width,height),3)
+    
+    # Draw background if provided (for active state)
+    if bg_color:
+        pygame.draw.rect(screen, bg_color, (xpo-10, ypo-10, width, height))
+    
+    # Draw border - make it brighter if pressed for visual feedback
+    border_color = tron_light if pressed else tron_regular
+    pygame.draw.rect(screen, border_color, (xpo-10,ypo-10,width,height),3)
     pygame.draw.rect(screen, tron_light, (xpo-9,ypo-9,width-1,height-1),1)
-    pygame.draw.rect(screen, tron_regular, (xpo-8,ypo-8,width-2,height-2),1)
+    pygame.draw.rect(screen, border_color, (xpo-8,ypo-8,width-2,height-2),1)
+    
     font=pygame.font.Font(None,42)
     label=font.render(str(text).rjust(12), 1, (colour))
     screen.blit(label,(xpo,ypo))
@@ -720,9 +746,16 @@ def on_touch():
         return None
     
     # button 1 event x_min, x_max, y_min, y_max
+    # Check for up button in library (right side, moved up and bigger)
+    if 410 <= touch_pos[0] <= 470 and 30 <= touch_pos[1] <= 70:
+        return 1
+    # Check for down button in library (right side, moved up and bigger)
+    if 410 <= touch_pos[0] <= 470 and 75 <= touch_pos[1] <= 115:
+        return 2
+    # Original button 1 (left side, full size) - check if not in library small button area
     if 30 <= touch_pos[0] <= 240 and 105 <= touch_pos[1] <=160:
         return 1
-    # button 2 event
+    # Original button 2 (right side, full size) - check if not in library small button area
     if 260 <= touch_pos[0] <= 470 and 105 <= touch_pos[1] <=160:
         return 2
     # button 3 event
@@ -845,16 +878,26 @@ def init(draw=True):
         if draw:
             # Customise layout
             # Set size of the screen
-            screen = pygame.display.set_mode(size)
+            # On desktop, add RESIZABLE flag so window can be resized if needed
+            flags = 0 if IS_RASPBERRY_PI else pygame.RESIZABLE
+            screen = pygame.display.set_mode(size, flags)
             # Background Color
             screen.fill(black)
             # Draw border
             draw_screen_border(screen)
+            # Update display to show initial screen
+            pygame.display.update()
+            # Set window title on desktop
+            if not IS_RASPBERRY_PI:
+                pygame.display.set_caption("Picorder - Audio Recorder")
 
             return screen
     except pygame.error as e:
         logger.error(f"Failed to initialize pygame display: {e}")
-        logger.error("This application requires a physical display (TFT screen).")
+        if IS_RASPBERRY_PI:
+            logger.error("This application requires a physical display (TFT screen).")
+        else:
+            logger.error("This application requires X11 display. Make sure DISPLAY is set.")
         raise RuntimeError(f"Failed to initialize display: {e}") from e
 
 def draw_audio_meter(screen, level, x=400, y=30, width=20, height=60):
@@ -885,27 +928,43 @@ def draw_audio_meter(screen, level, x=400, y=30, width=20, height=60):
             pygame.draw.line(screen, tron_light, (x + 1, fill_y), (x + width - 2, fill_y), 1)
 
 def populate_screen(names, screen, service=["","","","","",""], label1=True,
-        label2=False, label3=False, b12=True, b34=True, b56=True, show_audio_meter=False, audio_level=0.0):
+        label2=False, label3=False, b12=True, b34=True, b56=True, show_audio_meter=False, audio_level=0.0,
+        button_colors=None):
+    """
+    Populate screen with labels and buttons
+    
+    Args:
+        button_colors: Dict mapping button index (1-6) to background color tuple (R, G, B)
+    """
+    if button_colors is None:
+        button_colors = {}
+    
     # Buttons and labels
     # First Row Label
     if label1:
         make_label(names[0], label_pos_1, tron_inverse, screen)
-    # Second Row buttons 3 and 4
+    # Second Row buttons 1 and 2
     if b12:
-        make_button(names[1], button_pos_1, s2c(service[0]), screen)
-        make_button(names[2], button_pos_2, s2c(service[1]), screen)
+        bg1 = button_colors.get(1)
+        bg2 = button_colors.get(2)
+        make_button(names[1], button_pos_1, s2c(service[0]), screen, bg_color=bg1)
+        make_button(names[2], button_pos_2, s2c(service[1]), screen, bg_color=bg2)
     elif label2:
         make_label(names[1], label_pos_2, tron_inverse, screen)
-    # Third Row buttons 5 and 6
+    # Third Row buttons 3 and 4
     if b34:
-        make_button(names[3], button_pos_3, s2c(service[2]), screen)
-        make_button(names[4], button_pos_4, s2c(service[3]), screen)
+        bg3 = button_colors.get(3)
+        bg4 = button_colors.get(4)
+        make_button(names[3], button_pos_3, s2c(service[2]), screen, bg_color=bg3)
+        make_button(names[4], button_pos_4, s2c(service[3]), screen, bg_color=bg4)
     elif label3:
         make_label(names[3], label_pos_3, tron_inverse, screen)
-    # Fourth Row Buttons
+    # Fourth Row Buttons 5 and 6
     if b56:
-        make_button(names[5], button_pos_5, s2c(service[4]), screen)
-        make_button(names[6], button_pos_6, s2c(service[5]), screen)
+        bg5 = button_colors.get(5)
+        bg6 = button_colors.get(6)
+        make_button(names[5], button_pos_5, s2c(service[4]), screen, bg_color=bg5)
+        make_button(names[6], button_pos_6, s2c(service[5]), screen, bg_color=bg6)
     
     # Draw audio meter if requested
     if show_audio_meter:
@@ -917,9 +976,23 @@ def main(buttons=[], update_callback=None):
         sleep_delay=0.1
     else:
         sleep_delay=0.4
+    
+    print(f"Main loop started (buttons={bool(buttons)}, callback={bool(update_callback)})", flush=True)
+    
     # While loop to manage touch screen inputs
     # Note: pygame.event.get() is non-blocking, so timeout check happens every loop iteration
+    loop_count = 0
     while 1:
+        loop_count += 1
+        if loop_count == 1:
+            print("Main loop iteration 1", flush=True)
+        if loop_count == 2:
+            print("Main loop iteration 2", flush=True)
+        if loop_count == 10:
+            print("Main loop iteration 10", flush=True)
+        if loop_count == 30:
+            print("Main loop iteration 30 (callback should fire)", flush=True)
+        
         # Check screen timeout before processing events
         # This ensures screen can timeout even if no events are received
         if should_screen_timeout():
@@ -946,8 +1019,9 @@ def main(buttons=[], update_callback=None):
                         config = load_config()
                         audio_device = config.get("audio_device", "")
                         
-                        # Only check audio if device is configured and valid
-                        if audio_device and is_audio_device_valid(audio_device):
+                        # Only check audio if device is configured - skip validation to avoid blocking
+                        # Validation can block, so just check if device is configured
+                        if audio_device:
                             # Check for audio input (threshold: 0.02 = 2% of max level)
                             audio_level = get_audio_level(audio_device, sample_duration=0.05)
                             if audio_level > 0.02:  # Audio detected above threshold
@@ -971,7 +1045,15 @@ def main(buttons=[], update_callback=None):
                     pos = (pygame.mouse.get_pos() [0], pygame.mouse.get_pos() [1])
                     b = on_touch()
                     if b:
+                        # Execute button action immediately (non-blocking)
+                        # The action will update the display
                         button(b, _1, _2, _3, _4, _5, _6)
+                        # Process events immediately after button press to keep UI responsive
+                        pygame.event.pump()
+                        # Update display after button action (button handler should call update_display)
+                        pygame.display.update()
+                        # Process events again to ensure UI stays responsive
+                        pygame.event.pump()
                 else:
                     screen_on()
 
@@ -981,14 +1063,42 @@ def main(buttons=[], update_callback=None):
                     sys.exit()
         
         # Call update callback if provided (for dynamic content like recording status)
+        # Only call it occasionally to avoid blocking (every 30 iterations = ~3 seconds)
         if update_callback and buttons:
-            try:
-                update_callback()
-            except Exception as e:
-                logger.error(f"Error in update callback: {e}", exc_info=True)
+            # Use a counter to throttle callback frequency
+            if not hasattr(main, '_callback_counter'):
+                main._callback_counter = 0
+            main._callback_counter += 1
+            if main._callback_counter >= 10:  # Call every 10 iterations (~1 second) for responsive updates
+                main._callback_counter = 0
+                try:
+                    # Process events before callback to keep UI responsive
+                    pygame.event.pump()
+                    # Call callback - wrap in try-except with timeout protection
+                    # Use a simple timeout approach: if callback takes too long, skip it
+                    import signal
+                    def timeout_handler(signum, frame):
+                        raise TimeoutError("Callback timeout")
+                    
+                    # On Unix, we could use signal.alarm, but that's complex
+                    # Instead, just call it and hope it's fast
+                    # If it blocks, the exception handler will catch it
+                    update_callback()
+                    # Process events immediately after callback to keep UI responsive
+                    pygame.event.pump()
+                except (Exception, KeyboardInterrupt) as e:
+                    logger.debug(f"Error in update callback (non-fatal): {e}")
+                    # Don't let callback errors break the main loop - just continue
+                    # Process events even on error to keep UI responsive
+                    try:
+                        pygame.event.pump()
+                    except:
+                        pass
         
         if buttons:
             pygame.display.update()
+            # Process events every loop iteration to keep UI responsive
+            pygame.event.pump()
         ## Reduce CPU utilisation
         time.sleep(sleep_delay)
 

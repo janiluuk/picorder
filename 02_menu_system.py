@@ -23,7 +23,7 @@ else:
         save_config(config)
 
 def _1():
-    # Select audio device
+    # Select audio device (button 1)
     global current_device_index, config, audio_device, audio_devices
     # Refresh device list in case devices changed
     audio_devices = get_audio_devices()
@@ -40,51 +40,64 @@ def _1():
     save_config(config)
     
     # If "None" selected or device invalid, disable auto-record and stop any recordings
-    if audio_device == "" or not is_audio_device_valid(audio_device):
+    # Skip validation to avoid blocking - just check if device is configured
+    if audio_device == "":
         config["auto_record"] = False
         save_config(config)
         # Stop silentjack if running
         stop_silentjack()
         # Stop any active recording (thread-safe check)
         import menu_settings as ms
-        if ms._recording_manager.is_recording:
-            stop_recording()
+        try:
+            if ms._recording_manager.is_recording:
+                stop_recording()
+        except Exception:
+            pass
     
     # Update display
     update_display()
 
 def _2():
-    # Toggle auto-record (only if valid device is selected)
+    # Toggle auto-record (button 2)
     global auto_record_enabled, audio_devices, current_device_index
     config = load_config()
     audio_device = config.get("audio_device", "")
     
     # Can't enable auto-record if no device is selected
-    if audio_device == "" or not is_audio_device_valid(audio_device):
-        # Device invalid, can't enable
+    if audio_device == "":
+        # No device, can't enable
         return
     
-    auto_record_enabled = not config.get("auto_record", True)
+    # Skip validation to avoid blocking - just check if device is configured
+    auto_record_enabled = not config.get("auto_record", False)
     config["auto_record"] = auto_record_enabled
     save_config(config)
+    
+    # Start/stop silentjack based on new state
+    if auto_record_enabled:
+        # auto_record_monitor will handle starting silentjack
+        pass
+    else:
+        stop_silentjack()
+    
     update_display()
 
 def _3():
-    # Back to main menu
+    # Back to main menu (button 3)
     go_to_page(PAGE_01)
 
 def _4():
-    # Shutdown
+    # Back to main menu (button 4 - also back)
+    go_to_page(PAGE_01)
+
+def _5():
+    # Shutdown (button 5 - not shown in current layout)
     pygame.quit()
     run_cmd("/usr/bin/sudo /sbin/shutdown -h now")
     sys.exit()
 
-def _5():
-    # Previous (back to main)
-    go_to_page(PAGE_01)
-
 def _6():
-    # Next (not used)
+    # Not used
     pass
 
 def update_display():
@@ -119,15 +132,28 @@ def update_display():
     else:
         auto_status = "ON" if auto_record_enabled else "OFF"
     
-    names[0] = "Settings"
-    names[1] = "Device: " + device_name
-    names[2] = "Auto: " + auto_status
-    names[3] = disk_space
+    # Use symbols for visual engagement
+    device_symbol = "🎤" if device_valid else "❌"
+    auto_symbol = "✅" if auto_record_enabled and device_valid else "⭕"
+    
+    names[0] = "⚙️ Settings"
+    names[1] = f"{device_symbol} Device"
+    names[2] = f"{auto_symbol} Auto-Record"
+    names[3] = f"💾 {disk_space}"
+    names[4] = "← Back"
+    names[5] = ""
+    names[6] = ""
+    
+    # Determine button colors for active states
+    button_colors = {}
+    if device_valid and auto_record_enabled:
+        button_colors[2] = green  # Green background when auto-record is ON
     
     # Redraw screen
     screen.fill(black)
     draw_screen_border(screen)
-    populate_screen(names, screen, b12=False, b34=False, b56=False, label2=True, label3=True)
+    # Draw: label1 (title), buttons for Device and Auto-Record (b12), Back button (b34)
+    populate_screen(names, screen, b12=True, b34=True, b56=False, label1=True, label2=False, label3=False, button_colors=button_colors)
 
 config = load_config()
 auto_record_enabled = config.get("auto_record", True)
@@ -137,7 +163,10 @@ device_name = audio_devices[current_device_index][1]
 if len(device_name) > MAX_DEVICE_NAME_LENGTH:
     device_name = device_name[:17] + "..."
 
-names = ["Settings", "Device: " + device_name, "Auto: " + ("ON" if auto_record_enabled else "OFF"), get_disk_space(), "Back", "", ""]
+# Initialize names with symbols
+device_symbol = "🎤" if audio_device else "❌"
+auto_symbol = "✅" if auto_record_enabled else "⭕"
+names = ["⚙️ Settings", f"{device_symbol} Device", f"{auto_symbol} Auto-Record", f"💾 {get_disk_space()}", "← Back", "", ""]
 
 screen = init()
 update_display()
