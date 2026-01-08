@@ -11,7 +11,10 @@ from recording_state import RecordingStateMachine, RecordingState
 # Recording menu - main interface
 
 config = load_config()
-auto_record_enabled = config.get("auto_record", True)
+# Use consistent default value - load_config() returns default_config which includes auto_record=True
+# Since load_config() always returns a dict with auto_record key (from default_config merge),
+# the key will always exist, but we use True as default for safety and consistency
+auto_record_enabled = config.get("auto_record", True)  # Match default_config in load_config()
 audio_device = config.get("audio_device", "plughw:0,0")
 
 def _1():
@@ -19,7 +22,9 @@ def _1():
     global auto_record_enabled, config
     config = load_config()
     audio_device = config.get("audio_device", "")
-    current_auto_record = config.get("auto_record", False)
+    # CRITICAL FIX: Use same default as line 17 to ensure consistency
+    # load_config() returns default_config with auto_record=True, so use True as default here too
+    current_auto_record = config.get("auto_record", True)  # Match default_config and line 17
     
     # Check if device is valid - skip validation to avoid blocking
     # Just check if device is configured, don't validate (validation can block)
@@ -391,7 +396,17 @@ def _2():
             _optimistic_state['pending_stop'] = False
         pending_stop = False
     
-    should_stop = (is_optimistically_recording or is_actually_recording) and not pending_stop
+    # CRITICAL FIX: If actual_recording=True but pending_stop=True, the stop didn't work
+    # Clear pending_stop and allow stopping again to prevent stuck state
+    if is_actually_recording and pending_stop:
+        logger.warning("_2(): Recording still running despite pending_stop - clearing flag to allow retry")
+        with _optimistic_state_lock:
+            _optimistic_state['pending_stop'] = False
+        pending_stop = False
+    
+    # Decision: stop if recording (either optimistic or actual), start if not recording
+    # Don't block stop if we're actually recording (even if pending_stop was set)
+    should_stop = is_optimistically_recording or is_actually_recording
     should_start = (not is_optimistically_recording and not is_actually_recording) and not pending_start and not pending_stop
     
     # Log state for debugging
@@ -527,7 +542,7 @@ def auto_record_monitor():
     import time
     while True:
         config = load_config()  # Reload config in case it changed
-        auto_record_enabled = config.get("auto_record", False)
+        auto_record_enabled = config.get("auto_record", True)  # Match default_config in load_config()
         audio_device = config.get("audio_device", "")
         
         # Get recording state in a single thread-safe operation to avoid race conditions
@@ -626,7 +641,7 @@ def update_display():
         # Try to get config quickly - use cached version if possible
         config = load_config()
         audio_device = config.get("audio_device", "")
-        auto_record_enabled = config.get("auto_record", False)
+        auto_record_enabled = config.get("auto_record", True)  # Match default_config in load_config()
         # Don't validate device here - it blocks! Just assume it might be valid
         # Validation can happen in background or be skipped for display purposes
         device_valid = bool(audio_device)  # Just check if device is configured, don't validate
@@ -888,7 +903,7 @@ try:
             button_colors[2] = red  # Red background when recording
         # Check auto-record status
         config = load_config()
-        auto_record_enabled = config.get("auto_record", False)
+        auto_record_enabled = config.get("auto_record", True)  # Match default_config in load_config()
         audio_device = config.get("audio_device", "")
         if auto_record_enabled and audio_device:
             button_colors[1] = green  # Green background when auto-record is enabled

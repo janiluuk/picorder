@@ -98,14 +98,6 @@ _recording_manager = RecordingManager(
     menu_dir=str(MENUDIR)
 )
 
-# Legacy global variables for backward compatibility (deprecated - use RecordingManager)
-# These are kept for compatibility but will be removed in future versions
-recording_process = None  # Deprecated
-silentjack_process = None  # Deprecated
-recording_start_time = None  # Deprecated
-recording_filename = None  # Deprecated
-recording_mode = None
-
 # Recording queue and worker thread - shared across all pages
 # These must be in menu_settings.py so they persist when pages are loaded via exec()
 from queue import Queue
@@ -114,13 +106,12 @@ _recording_queue = None  # Will be initialized on first use
 _recording_thread = None  # Will be initialized on first use
 _recording_operation_in_progress = None  # Will be initialized on first use
 _recording_state_machine = None  # Will be initialized on first use  # Deprecated
-is_recording = False  # Deprecated
 
 # Current page tracking for on_touch() to know which menu is active
 _current_page = None  # Will be set by go_to_page()
 
-# Lock for legacy compatibility
-_recording_lock = _recording_manager._lock
+# Note: All recording state is now managed by RecordingManager (_recording_manager)
+# Legacy global variables have been removed - use RecordingManager methods directly
 
 # Activity tracking
 last_activity_time = time.time()
@@ -365,7 +356,7 @@ def load_config():
     """Load configuration from file"""
     default_config = {
         "audio_device": "plughw:0,0",
-        "auto_record": True
+        "auto_record": True  # Default to True - all code uses True as default for consistency
     }
     try:
         config_path = Path(CONFIG_FILE)
@@ -531,9 +522,11 @@ def get_audio_level(device, sample_duration=0.05):
         return 0.0
 
 def start_recording(device, mode="manual"):
-    """Start audio recording (wrapper for RecordingManager)"""
-    global recording_process, recording_start_time, recording_mode, is_recording, recording_filename
+    """Start audio recording (wrapper for RecordingManager)
     
+    This is a thin wrapper that delegates to RecordingManager.
+    All state is managed by RecordingManager - no legacy globals are updated.
+    """
     # Skip device validation to avoid blocking - just check if device is configured
     if not device or device == "":
         logger.warning("Cannot start recording: no audio device selected")
@@ -543,83 +536,54 @@ def start_recording(device, mode="manual"):
     # RecordingManager will handle errors gracefully and check disk space internally
     
     # Use RecordingManager to start recording (non-blocking, returns quickly)
-    success = _recording_manager.start_recording(device, mode)
-    
-    # Update legacy globals for backward compatibility
-    if success:
-        with _recording_lock:
-            is_recording = True
-            recording_mode = mode
-            recording_start_time = _recording_manager.recording_start_time
-            # Note: recording_process and recording_filename are now internal to RecordingManager
-    
-    return success
+    return _recording_manager.start_recording(device, mode)
 
 def start_silentjack(device):
-    """Start silentjack monitoring process (wrapper for RecordingManager)"""
-    global silentjack_process
-    # Use RecordingManager
-    success = _recording_manager.start_silentjack(device)
-    # Update legacy global for backward compatibility (internal access needed for legacy code)
-    if success:
-        # Access internal process for legacy compatibility (not recommended for new code)
-        with _recording_lock:
-            silentjack_process = _recording_manager._silentjack_process
-    return success
+    """Start silentjack monitoring process (wrapper for RecordingManager)
+    
+    This is a thin wrapper that delegates to RecordingManager.
+    All state is managed by RecordingManager.
+    """
+    return _recording_manager.start_silentjack(device)
 
 def stop_silentjack():
-    """Stop silentjack monitoring process (wrapper for RecordingManager)"""
-    global silentjack_process
-    # Use RecordingManager
-    success = _recording_manager.stop_silentjack()
-    silentjack_process = None  # Clear legacy global
-    return success
+    """Stop silentjack monitoring process (wrapper for RecordingManager)
+    
+    This is a thin wrapper that delegates to RecordingManager.
+    All state is managed by RecordingManager.
+    """
+    return _recording_manager.stop_silentjack()
 
 def create_silentjack_script(device):
     """Create script that silentjack will call when jack is inserted/removed (wrapper for RecordingManager)"""
     return _recording_manager._create_silentjack_script(device)
 
 def stop_recording():
-    """Stop audio recording and rename file with duration (wrapper for RecordingManager)"""
-    global recording_process, recording_start_time, recording_mode, is_recording, recording_filename
+    """Stop audio recording and rename file with duration (wrapper for RecordingManager)
     
+    This is a thin wrapper that delegates to RecordingManager.
+    All state is managed by RecordingManager - no legacy globals are updated.
+    """
     logger.info("stop_recording() wrapper called - about to call RecordingManager.stop_recording()")
-    # Use RecordingManager to stop recording
     try:
         success = _recording_manager.stop_recording()
         logger.info(f"stop_recording() wrapper - RecordingManager returned: {success}")
+        return success
     except Exception as e:
         logger.error(f"stop_recording() wrapper - Exception calling RecordingManager: {e}", exc_info=True)
-        success = False
-    
-    # Update legacy globals for backward compatibility
-    with _recording_lock:
-        is_recording = _recording_manager.is_recording
-        recording_mode = _recording_manager.recording_mode
-        recording_start_time = _recording_manager.recording_start_time
-        recording_process = None  # No longer accessible directly
-        recording_filename = None  # No longer accessible directly
-    
-    return success
+        return False
 
 def rename_with_duration(filename, duration_seconds):
     """Rename a recording file to include duration in the name (wrapper for RecordingManager)"""
     return _recording_manager._rename_with_duration(Path(filename), duration_seconds)
 
 def get_recording_status():
-    """Get recording status and duration (wrapper for RecordingManager)"""
-    global is_recording, recording_start_time, recording_mode
+    """Get recording status and duration (wrapper for RecordingManager)
     
-    # Use RecordingManager to get status
-    status, duration = _recording_manager.get_recording_status()
-    
-    # Update legacy globals for backward compatibility
-    with _recording_lock:
-        is_recording = _recording_manager.is_recording
-        recording_mode = _recording_manager.recording_mode
-        recording_start_time = _recording_manager.recording_start_time
-    
-    return status, duration
+    This is a thin wrapper that delegates to RecordingManager.
+    All state is managed by RecordingManager - no legacy globals are updated.
+    """
+    return _recording_manager.get_recording_status()
 
 def check_silence(device, duration=20):
     """Check if there's been silence for specified duration (for manual recording)"""
@@ -1107,15 +1071,20 @@ def main(buttons=[], update_callback=None):
         
         # Check screen timeout before processing events
         # This ensures screen can timeout even if no events are received
+        # Note: should_screen_timeout() checks recording state, so it's safe to call here
         if should_screen_timeout():
             screen_off()
             # Wait for touch to wake up screen
             # Keep checking for wake-up events, recording state, and audio input
             # Screen will wake if: touched, recording starts, or audio input detected
+            # IMPORTANT: Check timeout at the start of the loop to handle timeout correctly
             audio_check_counter = 0  # Check audio every few iterations to reduce CPU usage
             while should_screen_timeout():
-                # Check events without blocking - allows immediate wake on touch
+                # Process events first (non-blocking) to allow immediate wake on touch
+                # This ensures screen can wake up immediately when touched, even during timeout
+                events_processed = False
                 for event in pygame.event.get():
+                    events_processed = True
                     if event.type == pygame.MOUSEBUTTONDOWN:
                         screen_on()
                         update_activity()  # Reset timeout timer

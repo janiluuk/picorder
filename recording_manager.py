@@ -765,14 +765,33 @@ else
                 
                 # Rename with error checking - verify source exists and rename succeeds
                 if [ -f "$OLD_FILE" ]; then
-                    if mv "$OLD_FILE" "$NEW_FILE" 2>/dev/null && [ -f "$NEW_FILE" ]; then
-                        # Successfully renamed - file exists at new location
-                        :
+                    # Verify source file exists and is readable before attempting rename
+                    if [ ! -r "$OLD_FILE" ]; then
+                        echo "Error: Source file is not readable: $OLD_FILE" >&2
+                    elif mv "$OLD_FILE" "$NEW_FILE" 2>/dev/null; then
+                        # Verify rename succeeded by checking new file exists
+                        if [ -f "$NEW_FILE" ]; then
+                            # Successfully renamed - file exists at new location
+                            :
+                        else
+                            # Rename appeared to succeed but new file doesn't exist
+                            echo "Error: Rename appeared to succeed but new file not found: $NEW_FILE" >&2
+                            # Try to recover original file if possible
+                            if [ ! -f "$OLD_FILE" ]; then
+                                echo "Error: Original file also missing after failed rename!" >&2
+                            fi
+                        fi
                     else
                         # Rename failed - log error (to stderr which silentjack may capture)
-                        echo "Error: Failed to rename recording file" >&2
+                        echo "Error: Failed to rename recording file from $OLD_FILE to $NEW_FILE" >&2
                         # Keep original file to avoid data loss
+                        if [ ! -f "$OLD_FILE" ]; then
+                            echo "Error: Original file missing after failed rename attempt!" >&2
+                        fi
                     fi
+                else
+                    # Source file doesn't exist - log error
+                    echo "Error: Source file does not exist: $OLD_FILE" >&2
                 fi
             fi
         fi
