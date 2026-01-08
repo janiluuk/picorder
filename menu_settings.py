@@ -104,7 +104,7 @@ recording_process = None  # Deprecated
 silentjack_process = None  # Deprecated
 recording_start_time = None  # Deprecated
 recording_filename = None  # Deprecated
-recording_mode = None
+1wrecording_mode = None
 
 # Recording queue and worker thread - shared across all pages
 # These must be in menu_settings.py so they persist when pages are loaded via exec()
