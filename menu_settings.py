@@ -180,6 +180,21 @@ def get_disk_space():
         logger.error(f"Unexpected error getting disk space: {e}", exc_info=True)
         return "Free: N/A"
 
+def get_current_device_config():
+    """Get current audio device and auto-record configuration with validation"""
+    config = load_config()
+    audio_device = config.get("audio_device", "")
+    auto_record = config.get("auto_record", False)
+    
+    # Validate device - if invalid, disable auto-record
+    device_valid = audio_device and is_audio_device_valid(audio_device)
+    if not device_valid and auto_record:
+        config["auto_record"] = False
+        save_config(config)
+        auto_record = False
+    
+    return config, audio_device, auto_record, device_valid
+
 def load_config():
     """Load configuration from file"""
     default_config = {
@@ -554,8 +569,19 @@ button_pos_6 = (260, 255, 55, 210)
 
 size = width, height = 480, 320
 
+# Screen drawing constants
+SCREEN_BORDER_OUTER = (0, 0, 479, 319)
+SCREEN_BORDER_INNER = (2, 2, 479-4, 319-4)
+SCREEN_BORDER_OUTER_WIDTH = 8
+SCREEN_BORDER_INNER_WIDTH = 2
+
 ################################################################################
 # Functions
+def draw_screen_border(screen):
+    """Draw standard screen border"""
+    pygame.draw.rect(screen, tron_regular, SCREEN_BORDER_OUTER, SCREEN_BORDER_OUTER_WIDTH)
+    pygame.draw.rect(screen, tron_light, SCREEN_BORDER_INNER, SCREEN_BORDER_INNER_WIDTH)
+
 # define function for printing text in a specific place with a specific width
 # and height with a specific colour and border
 def make_button(text, pos, colour, screen):
@@ -722,9 +748,8 @@ def init(draw=True):
             screen = pygame.display.set_mode(size)
             # Background Color
             screen.fill(black)
-            # Outer Border
-            pygame.draw.rect(screen, tron_regular, (0,0,479,319),8)
-            pygame.draw.rect(screen, tron_light, (2,2,479-4,319-4),2)
+            # Draw border
+            draw_screen_border(screen)
 
             return screen
     except pygame.error as e:

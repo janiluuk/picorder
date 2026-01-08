@@ -110,20 +110,12 @@ def update_display():
     # Get disk space
     disk_space = get_disk_space()
     
-    # Get auto-record status
-    config = load_config()
-    audio_device = config.get("audio_device", "")
-    auto_record_enabled = config.get("auto_record", False)
+    # Get current device configuration with validation
+    config, audio_device, auto_record_enabled, device_valid = get_current_device_config()
     
-    # Auto-record can only be ON if valid device is selected
-    device_valid = audio_device and is_audio_device_valid(audio_device)
+    # Display auto-record status
     if not device_valid:
-        auto_record_enabled = False
         auto_status = "OFF (No Device)"
-        # Update config if it was enabled
-        if config.get("auto_record", False):
-            config["auto_record"] = False
-            save_config(config)
     else:
         auto_status = "ON" if auto_record_enabled else "OFF"
     
@@ -134,8 +126,7 @@ def update_display():
     
     # Redraw screen
     screen.fill(black)
-    pygame.draw.rect(screen, tron_regular, (0,0,479,319),8)
-    pygame.draw.rect(screen, tron_light, (2,2,479-4,319-4),2)
+    draw_screen_border(screen)
     populate_screen(names, screen, b12=False, b34=False, b56=False, label2=True, label3=True)
 
 config = load_config()
