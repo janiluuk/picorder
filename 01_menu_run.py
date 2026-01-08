@@ -113,9 +113,19 @@ if ms._recording_queue is None:
 if ms._recording_state_machine is None:
     from recording_state import RecordingStateMachine
     ms._recording_state_machine = RecordingStateMachine(ms._recording_manager)
+# Optimistic UI state - updated immediately, synced with actual state later
+if not hasattr(ms, '_optimistic_recording_state'):
+    ms._optimistic_recording_state = {
+        'is_recording': False,
+        'mode': None,
+        'start_time': None,
+        'pending_start': False,
+        'pending_stop': False
+    }
 _recording_queue = ms._recording_queue
 _recording_operation_in_progress = ms._recording_operation_in_progress
 _recording_state_machine = ms._recording_state_machine
+_optimistic_state = ms._optimistic_recording_state
 
 def _recording_worker():
     """Background worker thread for recording operations"""
@@ -163,16 +173,22 @@ def _recording_worker():
                     try:
                         logger.info("Worker: Processing start recording operation from queue")
                         result = start_recording(device, mode=mode)
-                        # Use ms._recording_state_machine directly to avoid scope issues
-                        if ms._recording_state_machine is not None:
-                            if result:
+                        # Update optimistic state based on result
+                        if result:
+                            # Success - optimistic state was correct, just clear pending flag
+                            ms._optimistic_recording_state['pending_start'] = False
+                            if ms._recording_state_machine is not None:
                                 ms._recording_state_machine.on_start_success()
-                                logger.info("Worker: Recording started successfully")
-                            else:
-                                ms._recording_state_machine.on_start_failure("start_recording() returned False")
-                                logger.warning("Worker: Recording start failed")
+                            logger.info("Worker: Recording started successfully")
                         else:
-                            logger.warning("Worker: State machine not initialized")
+                            # Failed - revert optimistic state
+                            ms._optimistic_recording_state['is_recording'] = False
+                            ms._optimistic_recording_state['mode'] = None
+                            ms._optimistic_recording_state['start_time'] = None
+                            ms._optimistic_recording_state['pending_start'] = False
+                            if ms._recording_state_machine is not None:
+                                ms._recording_state_machine.on_start_failure("start_recording() returned False")
+                            logger.warning("Worker: Recording start failed")
                     except Exception as e:
                         error_msg = str(e)
                         if ms._recording_state_machine is not None:
@@ -324,108 +340,52 @@ if ms._recording_thread is None or not ms._recording_thread.is_alive():
 _recording_thread = ms._recording_thread
 
 def _2():
-    # Manual record/stop (toggle) - optimistic UI update pattern
-    # Update UI state immediately, then queue the operation
-    global audio_device, _recording_thread, names
-    import pygame
-    import time
+    # Manual record/stop (toggle) - ultra-minimal, completely non-blocking
+    # Only queue operation - all state updates happen in worker/display callback
+    global audio_device, _recording_thread
     
-    # Process events immediately to keep UI responsive
-    try:
-        pygame.event.pump()
-    except:
-        pass
+    # Use cached audio_device from module level (set at startup)
+    # Don't load config here - it might block
+    device = audio_device if audio_device else "plughw:0,0"
     
-    # Get audio device - use cached config if available
-    try:
-        if 'config' in globals() and config:
-            audio_device = config.get("audio_device", "")
-        else:
-            config = load_config()
-            audio_device = config.get("audio_device", "")
-    except Exception as e:
-        logger.debug(f"Error loading config: {e}, using default")
-        audio_device = "plughw:0,0"
-    
-    if not audio_device:
-        logger.debug("No audio device configured, cannot record")
+    if not device:
         return
     
-    # Check what the button currently says
-    try:
-        button_text = names[2] if 'names' in globals() and len(names) > 2 else ""
-    except:
-        button_text = ""
-    logger.info(f"Button text: '{button_text}'")
+    # Check optimistic state to determine action (simple dict read, no blocking)
+    is_optimistically_recording = _optimistic_state.get('is_recording', False)
     
-    # OPTIMISTIC UI UPDATE: Change state first, then do action
-    if "Stop" in str(button_text):
-        # User wants to stop - update UI immediately to show "Ready" and "Record"
+    if is_optimistically_recording:
+        # User wants to stop - update optimistic state and queue
         try:
-            names[0] = "Ready"  # Update status immediately
-            names[2] = "Record"  # Update button text immediately
-            # Update state machine optimistically
-            if ms._recording_state_machine is not None:
-                try:
-                    ms._recording_state_machine.request_stop()
-                except:
-                    pass
-        except:
-            pass
-        
-        # Force immediate display update to show the change
-        try:
-            if 'screen' in globals() and screen is not None:
-                screen.fill(black)
-                draw_screen_border(screen)
-                # Quick redraw with new state
-                populate_screen(names, screen, b12=True, b34=True, b56=True, label1=True, 
-                              show_audio_meter=False, audio_level=0.0, 
-                              button_colors={})  # No red background when stopped
-                pygame.display.update()
-        except:
-            pass
-        
-        # NOW queue the actual stop operation (non-blocking)
-        try:
+            import time
+            _optimistic_state['is_recording'] = False
+            _optimistic_state['mode'] = None
+            _optimistic_state['start_time'] = None
+            _optimistic_state['pending_stop'] = True
             _recording_queue.put_nowait(("stop", None, None))
-            logger.info(f"Stop operation queued. Queue size: {_recording_queue.qsize()}, worker alive: {_recording_thread.is_alive()}")
-        except queue_module.Full:
-            _recording_queue.put(("stop", None, None), timeout=0.1)
-        return
-    
-    # Button says "Record" - update UI immediately to show "Recording" and "Stop"
-    try:
-        names[0] = "● Recording"  # Update status immediately
-        names[2] = "Stop"  # Update button text immediately
-        # Update state machine optimistically
-        if ms._recording_state_machine is not None:
+            logger.info("Stop queued")
+        except:
             try:
-                ms._recording_state_machine.request_start(audio_device, mode="manual")
+                _recording_queue.put(("stop", None, None), timeout=0.01)
             except:
                 pass
-    except:
-        pass
+    else:
+        # User wants to start - update optimistic state and queue
+        try:
+            import time
+            _optimistic_state['is_recording'] = True
+            _optimistic_state['mode'] = "manual"
+            _optimistic_state['start_time'] = time.time()
+            _optimistic_state['pending_start'] = True
+            _recording_queue.put_nowait(("start", device, "manual"))
+            logger.info("Start queued")
+        except:
+            try:
+                _recording_queue.put(("start", device, "manual"), timeout=0.01)
+            except:
+                pass
     
-    # Force immediate display update to show the change
-    try:
-        if 'screen' in globals() and screen is not None:
-            screen.fill(black)
-            draw_screen_border(screen)
-            # Quick redraw with new state - button should be red
-            populate_screen(names, screen, b12=True, b34=True, b56=True, label1=True,
-                          show_audio_meter=False, audio_level=0.0,
-                          button_colors={2: red})  # Red background for record button
-            pygame.display.update()
-    except:
-        pass
-    
-    # NOW queue the actual start operation (non-blocking)
-    try:
-        _recording_queue.put_nowait(("start", audio_device, "manual"))
-        logger.info(f"Start operation queued. Queue size: {_recording_queue.qsize()}, worker alive: {_recording_thread.is_alive()}")
-    except queue_module.Full:
-        _recording_queue.put(("start", audio_device, "manual"), timeout=0.1)
+    # Return immediately - no blocking operations
     return
 
 def _3():
@@ -622,21 +582,47 @@ def update_display():
         current_mode = None
         recording_start_time = None
     
-    # Calculate status based on state
-    if is_currently_recording and recording_start_time:
-        duration = int(time.time() - recording_start_time)
+    # Use optimistic state for immediate UI feedback, but sync with actual state
+    # This provides instant visual feedback while actual state catches up
+    optimistic_is_recording = _optimistic_state.get('is_recording', False)
+    optimistic_mode = _optimistic_state.get('mode')
+    optimistic_start_time = _optimistic_state.get('start_time')
+    pending_start = _optimistic_state.get('pending_start', False)
+    pending_stop = _optimistic_state.get('pending_stop', False)
+    
+    # Determine display state: use optimistic if pending, otherwise use actual
+    # This gives immediate feedback while operation is in progress
+    if pending_start and optimistic_is_recording:
+        # Start is pending and optimistic says recording - use optimistic for immediate feedback
+        display_is_recording = True
+        display_mode = optimistic_mode or "manual"
+        display_start_time = optimistic_start_time
+    elif pending_stop and not optimistic_is_recording:
+        # Stop is pending and optimistic says not recording - use optimistic for immediate feedback
+        display_is_recording = False
+        display_mode = None
+        display_start_time = None
+    else:
+        # No pending operations or optimistic state matches actual - use actual state
+        display_is_recording = is_currently_recording
+        display_mode = current_mode
+        display_start_time = recording_start_time
+        # Sync optimistic state with actual if no pending operations
+        if not pending_start and not pending_stop:
+            _optimistic_state['is_recording'] = is_currently_recording
+            _optimistic_state['mode'] = current_mode
+            _optimistic_state['start_time'] = recording_start_time
+    
+    # Calculate status based on display state
+    if display_is_recording and display_start_time:
+        duration = int(time.time() - display_start_time)
         minutes = duration // 60
         seconds = duration % 60
-        mode_str = "Auto" if current_mode == "auto" else "Manual"
-        # Add audio indicator (● for recording)
-        audio_indicator = "●"
-        status = f"{audio_indicator} {mode_str}: {minutes:02d}:{seconds:02d}"
-    elif is_currently_recording:
-        # Recording but no start time (shouldn't happen, but handle gracefully)
+        mode_str = "Auto" if display_mode == "auto" else "Manual"
+        status = f"● {mode_str}: {minutes:02d}:{seconds:02d}"
+    elif display_is_recording:
         status = "● Recording"
-        audio_indicator = "●"
     else:
-        # Not recording
         status = "Ready"
     audio_level = 0.0
     show_meter = False
@@ -657,10 +643,9 @@ def update_display():
     
     names[0] = status
     names[1] = auto_text
-    # Use RecordingManager to check recording state (thread-safe)
-    # Reuse state already retrieved above for consistency (both values retrieved atomically)
-    if is_currently_recording:
-        if current_mode == "manual":
+    # Use display state for button text (includes optimistic updates for immediate feedback)
+    if display_is_recording:
+        if display_mode == "manual":
             names[2] = "Stop"
         else:
             names[2] = "Stop"  # Auto recording can also be stopped
@@ -677,8 +662,8 @@ def update_display():
     # Auto button (button 1) should be green when enabled
     if auto_record_enabled and device_valid:
         button_colors[1] = green  # Green background when auto-record is enabled
-    # Record button (button 2) should be red when recording
-    if is_currently_recording:
+    # Record button (button 2) should be red when recording (use display state)
+    if display_is_recording:
         button_colors[2] = red  # Red background when recording
     
     # Redraw screen - wrap in try-except to prevent blocking
