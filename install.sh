@@ -39,7 +39,13 @@ sudo apt-get install -y build-essential libasound2-dev libjack-dev libjack0 jack
 
 # Install Python dependencies
 echo "Installing Python dependencies..."
-pip3 install -r "$MENUDIR/requirements.txt" || pip3 install pygame
+# Install system-wide since menu.sh runs with sudo
+sudo pip3 install -r "$MENUDIR/requirements.txt" || {
+    echo "Failed to install from requirements.txt, trying pygame directly..."
+    sudo pip3 install "pygame>=2.0.0" || {
+        echo "Warning: Failed to install pygame. You may need to install it manually with: sudo pip3 install pygame"
+    }
+}
 
 # Install silentjack
 echo "Installing silentjack..."
