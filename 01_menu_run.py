@@ -112,8 +112,12 @@ def _1():
 
 # Queue for recording operations to avoid blocking UI
 # Use the shared queue from menu_settings so it persists across page navigations
+# Both queue and event must always be initialized together to prevent AttributeError
 if ms._recording_queue is None:
     ms._recording_queue = Queue()
+# Always ensure the event is initialized, even if queue already exists
+# This prevents crashes if queue persists but event doesn't (e.g., after page reload)
+if not hasattr(ms, '_recording_operation_in_progress') or ms._recording_operation_in_progress is None:
     ms._recording_operation_in_progress = threading.Event()
 # Always initialize state machine if it doesn't exist
 if ms._recording_state_machine is None:
@@ -180,7 +184,11 @@ def _recording_worker():
             
             logger.info(f"Worker: Processing {op_type} operation (device={device}, mode={mode})")
             logger.info(f"Worker: Queue size: {_recording_queue.qsize()}")
-            _recording_operation_in_progress.set()  # Mark operation as in progress
+            # Safely set operation in progress - check for None to prevent AttributeError
+            if _recording_operation_in_progress is not None:
+                _recording_operation_in_progress.set()  # Mark operation as in progress
+            else:
+                logger.warning("Worker: _recording_operation_in_progress is None, skipping set()")
             
             # Process operation with timeout protection
             try:
@@ -258,7 +266,7 @@ def _recording_worker():
                     except Exception as e:
                         logger.error(f"Worker: Error clearing state: {e}", exc_info=True)
                     
-                    # Step 4: Update optimistic state
+                    # Step 4: Update optimistic state (ensure it's fully cleared)
                     try:
                         with ms._optimistic_state_lock:
                             ms._optimistic_recording_state['is_recording'] = False
@@ -266,6 +274,7 @@ def _recording_worker():
                             ms._optimistic_recording_state['start_time'] = None
                             ms._optimistic_recording_state['pending_stop'] = False
                             ms._optimistic_recording_state['pending_start'] = False
+                        logger.info("Worker: Updated optimistic state to fully cleared (not recording)")
                     except Exception as e:
                         logger.warning(f"Worker: Could not update optimistic state: {e}")
                     
@@ -286,7 +295,11 @@ def _recording_worker():
                     consecutive_errors = 0
             finally:
                 # ALWAYS mark operation as done and clear in-progress flag
-                _recording_operation_in_progress.clear()
+                # Safely clear - check for None to prevent AttributeError
+                if _recording_operation_in_progress is not None:
+                    _recording_operation_in_progress.clear()
+                else:
+                    logger.warning("Worker: _recording_operation_in_progress is None, skipping clear()")
                 try:
                     _recording_queue.task_done()
                 except:
@@ -301,7 +314,9 @@ def _recording_worker():
                 logger.critical(f"Worker: {max_consecutive_errors} consecutive errors - worker may be stuck!")
                 consecutive_errors = 0
                 time.sleep(0.1)  # Small delay to prevent tight error loop
-            _recording_operation_in_progress.clear()
+            # Safely clear - check for None to prevent AttributeError
+            if _recording_operation_in_progress is not None:
+                _recording_operation_in_progress.clear()
             # Continue loop - don't let errors stop the worker
             continue
 
@@ -366,8 +381,22 @@ def _2():
     
     # Decision: If EITHER optimistic OR actual says recording, we should stop
     # Only start if BOTH say not recording AND no pending operations
-    should_stop = is_optimistically_recording or is_actually_recording
-    should_start = not should_stop and not pending_start and not pending_stop
+    # BUT: If pending_stop is True but we're not actually recording, clear it (stale state)
+    # If pending_start is True, we're already starting, so don't try to start again
+    
+    # Check if pending_stop is stale (we're not recording but pending_stop is True)
+    if pending_stop and not is_optimistically_recording and not is_actually_recording:
+        logger.warning("_2(): Found stale pending_stop flag - clearing it")
+        with _optimistic_state_lock:
+            _optimistic_state['pending_stop'] = False
+        pending_stop = False
+    
+    should_stop = (is_optimistically_recording or is_actually_recording) and not pending_stop
+    should_start = (not is_optimistically_recording and not is_actually_recording) and not pending_start and not pending_stop
+    
+    # Log state for debugging
+    logger.info(f"_2(): State check - optimistic_recording={is_optimistically_recording}, actual_recording={is_actually_recording}, pending_start={pending_start}, pending_stop={pending_stop}")
+    logger.info(f"_2(): Decision - should_stop={should_stop}, should_start={should_start}")
     
     if should_stop:
         # User wants to stop - queue operation first, then update optimistic state
