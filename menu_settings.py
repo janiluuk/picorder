@@ -753,22 +753,33 @@ def init(draw=True):
     os.environ["SDL_MOUSEDEV"] = TOUCH_DEVICE
     os.environ["SDL_MOUSEDRV"] = MOUSE_DRIVER
 
-    # Initialize pygame modules individually (to avoid ALSA errors) and hide mouse
-    pygame.font.init()
-    pygame.display.init()
-    pygame.mouse.set_visible(0)
+    # Check if display device exists
+    if not os.path.exists(SCREEN_DEVICE) and not os.environ.get("DISPLAY"):
+        logger.error(f"Display device {SCREEN_DEVICE} not found and no DISPLAY environment variable set.")
+        logger.error("This application requires a physical display (TFT screen) or X11 forwarding.")
+        raise RuntimeError(f"Display device {SCREEN_DEVICE} not available")
 
-    if draw:
-        # Customise layout
-        # Set size of the screen
-        screen = pygame.display.set_mode(size)
-        # Background Color
-        screen.fill(black)
-        # Outer Border
-        pygame.draw.rect(screen, tron_regular, (0,0,479,319),8)
-        pygame.draw.rect(screen, tron_light, (2,2,479-4,319-4),2)
+    try:
+        # Initialize pygame modules individually (to avoid ALSA errors) and hide mouse
+        pygame.font.init()
+        pygame.display.init()
+        pygame.mouse.set_visible(0)
 
-        return screen
+        if draw:
+            # Customise layout
+            # Set size of the screen
+            screen = pygame.display.set_mode(size)
+            # Background Color
+            screen.fill(black)
+            # Outer Border
+            pygame.draw.rect(screen, tron_regular, (0,0,479,319),8)
+            pygame.draw.rect(screen, tron_light, (2,2,479-4,319-4),2)
+
+            return screen
+    except pygame.error as e:
+        logger.error(f"Failed to initialize pygame display: {e}")
+        logger.error("This application requires a physical display (TFT screen).")
+        raise RuntimeError(f"Failed to initialize display: {e}") from e
 
 def draw_audio_meter(screen, level, x=400, y=30, width=20, height=60):
     """Draw a minimalistic vertical audio level meter"""

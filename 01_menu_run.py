@@ -252,9 +252,16 @@ auto_record_thread = threading.Thread(target=auto_record_monitor, daemon=True)
 auto_record_thread.start()
 
 # Initial display setup
-status, _ = get_recording_status()
-names = [status, "Auto: ON" if auto_record_enabled else "Auto: OFF", "Record", "Settings", "Screen Off", "", ""]
+try:
+    status, _ = get_recording_status()
+    names = [status, "Auto: ON" if auto_record_enabled else "Auto: OFF", "Record", "Settings", "Screen Off", "", ""]
 
-screen = init()
-update_display()
-main([_1, _2, _3, _4, _5, _6], update_callback=update_display)
+    screen = init()
+    update_display()
+    main([_1, _2, _3, _4, _5, _6], update_callback=update_display)
+except (RuntimeError, Exception) as e:
+    import sys
+    print(f"Error starting menu: {e}", file=sys.stderr)
+    print("This menu requires a physical display (TFT screen) connected to the Raspberry Pi.", file=sys.stderr)
+    print("Cannot run over SSH without X11 forwarding.", file=sys.stderr)
+    sys.exit(1)
