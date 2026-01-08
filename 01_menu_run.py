@@ -3,6 +3,9 @@ from menu_settings import *
 import threading
 import time
 from queue import Queue
+import queue as queue_module
+import menu_settings as ms
+from recording_state import RecordingStateMachine, RecordingState
 
 ################################################################################
 # Recording menu - main interface
@@ -37,8 +40,14 @@ def _1():
             state = ms._recording_manager.get_recording_state(blocking=False)
             if state and state['is_recording'] and state['mode'] == "auto":
                 # Queue stop operation to avoid blocking
-                if not _recording_operation_in_progress.is_set() and _recording_queue.qsize() <= 2:
-                    _recording_queue.put(("stop", None, None))
+                # Note: qsize() check is not atomic, but Queue.put() is thread-safe
+                # The size limit is advisory - if exceeded, the worker will process items sequentially
+                try:
+                    _recording_queue.put_nowait(("stop", None, None))
+                except queue_module.Full:
+                    logger.debug("Queue full, but this should not happen with unbounded Queue")
+                    # Fallback to blocking put with timeout
+                    _recording_queue.put(("stop", None, None), timeout=0.1)
         except Exception as e:
             logger.debug(f"Error checking recording state when disabling auto-record: {e}")
         
@@ -64,8 +73,13 @@ def _1():
                 if state['mode'] == 'manual':
                     # Stop manual recording before enabling auto-record
                     # Queue the stop operation to avoid blocking
-                    if not _recording_operation_in_progress.is_set() and _recording_queue.qsize() <= 2:
-                        _recording_queue.put(("stop", None, None))
+                    # Note: qsize() check is not atomic, but Queue.put() is thread-safe
+                    try:
+                        _recording_queue.put_nowait(("stop", None, None))
+                    except queue_module.Full:
+                        logger.debug("Queue full, but this should not happen with unbounded Queue")
+                        # Fallback to blocking put with timeout
+                        _recording_queue.put(("stop", None, None), timeout=0.1)
                 # If it's an auto recording, we can still enable auto-record (it's already on)
         except Exception as e:
             logger.debug(f"Error checking recording state when enabling auto-record: {e}")
@@ -91,118 +105,328 @@ def _1():
         pass  # Don't let display update block
 
 # Queue for recording operations to avoid blocking UI
-_recording_queue = Queue()
-_recording_operation_in_progress = threading.Event()  # Track if operation is in progress
+# Use the shared queue from menu_settings so it persists across page navigations
+if ms._recording_queue is None:
+    ms._recording_queue = Queue()
+    ms._recording_operation_in_progress = threading.Event()
+# Always initialize state machine if it doesn't exist
+if ms._recording_state_machine is None:
+    from recording_state import RecordingStateMachine
+    ms._recording_state_machine = RecordingStateMachine(ms._recording_manager)
+_recording_queue = ms._recording_queue
+_recording_operation_in_progress = ms._recording_operation_in_progress
+_recording_state_machine = ms._recording_state_machine
 
 def _recording_worker():
     """Background worker thread for recording operations"""
     from queue import Empty
+    logger.info("Worker thread started and running")
+    iteration = 0
     while True:
+        iteration += 1
         try:
-            operation = _recording_queue.get(timeout=1.0)  # Use timeout to allow periodic checks
+            queue_size = _recording_queue.qsize()
+            if queue_size > 0:
+                logger.info(f"Worker iteration {iteration}: Queue has {queue_size} item(s), calling get()...")
+            else:
+                # Log every 10 iterations when queue is empty to show worker is alive
+                if iteration % 10 == 0:
+                    logger.debug(f"Worker iteration {iteration}: Queue empty, waiting with timeout...")
+            
+            # Try to get with timeout - but first check if queue has items
+            # This helps diagnose if get() is blocking when it shouldn't
+            try:
+                operation = _recording_queue.get(timeout=0.5)  # Shorter timeout for more responsive checks
+                logger.info(f"Worker: get() returned, got operation: {operation}")
+            except Empty:
+                # Timeout occurred - check if queue actually has items
+                queue_size_after = _recording_queue.qsize()
+                if queue_size_after > 0:
+                    logger.warning(f"Worker: get() timed out but queue still has {queue_size_after} item(s) - trying get_nowait()")
+                    try:
+                        operation = _recording_queue.get_nowait()
+                        logger.info(f"Worker: get_nowait() succeeded after timeout, got: {operation}")
+                    except queue_module.Empty:
+                        logger.error(f"Worker: Both get() and get_nowait() failed - queue state inconsistent!")
+                        continue
+                else:
+                    # Queue is actually empty, normal timeout
+                    continue
             if operation is None:  # Shutdown signal
+                logger.info("Worker: Received shutdown signal, exiting")
                 break
             op_type, device, mode = operation
+            logger.info(f"Worker: Got operation from queue: {op_type}")
             _recording_operation_in_progress.set()  # Mark operation as in progress
             try:
                 if op_type == "start":
                     try:
-                        start_recording(device, mode=mode)
+                        logger.info("Worker: Processing start recording operation from queue")
+                        result = start_recording(device, mode=mode)
+                        # Use ms._recording_state_machine directly to avoid scope issues
+                        if ms._recording_state_machine is not None:
+                            if result:
+                                ms._recording_state_machine.on_start_success()
+                                logger.info("Worker: Recording started successfully")
+                            else:
+                                ms._recording_state_machine.on_start_failure("start_recording() returned False")
+                                logger.warning("Worker: Recording start failed")
+                        else:
+                            logger.warning("Worker: State machine not initialized")
                     except Exception as e:
+                        error_msg = str(e)
+                        if ms._recording_state_machine is not None:
+                            ms._recording_state_machine.on_start_failure(error_msg)
                         logger.warning(f"Failed to start recording in background: {e}", exc_info=True)
                 elif op_type == "stop":
                     try:
-                        stop_recording()
+                        logger.info("Worker: Processing stop recording operation from queue")
+                        # Don't check state before stopping - it might block
+                        # Just call stop_recording() directly
+                        import menu_settings as ms
+                        logger.info("Worker: About to call stop_recording()")
+                        
+                        # Always try to stop, even if state says not recording
+                        result = stop_recording()
+                        logger.info(f"Worker: stop_recording() returned: {result}")
+                        
+                        # Even if stop_recording returns False, kill any arecord processes
+                        # This handles cases where state is out of sync
+                        config = load_config()
+                        audio_device = config.get("audio_device", "")
+                        if audio_device:
+                            logger.info(f"Worker: Killing any remaining arecord processes for {audio_device} (regardless of stop_recording result)")
+                            ms._recording_manager._kill_zombie_arecord_processes(audio_device)
+                            # Clear cached state after killing processes
+                            with ms._recording_manager._lock:
+                                ms._recording_manager._cached_is_recording = False
+                                ms._recording_manager._cached_mode = None
+                                ms._recording_manager._cached_start_time = None
+                            # Give it a moment for processes to die
+                            import time
+                            time.sleep(0.1)
+                            # Double-check and kill again if needed
+                            try:
+                                import subprocess
+                                result = subprocess.run(["pgrep", "-f", f"arecord.*-D.*{audio_device}"], 
+                                                      capture_output=True, timeout=0.1)
+                                if result.returncode == 0 and result.stdout.strip():
+                                    logger.warning(f"Worker: Still found arecord processes after kill, killing again")
+                                    ms._recording_manager._kill_zombie_arecord_processes(audio_device)
+                                    # Clear cached state again
+                                    with ms._recording_manager._lock:
+                                        ms._recording_manager._cached_is_recording = False
+                                        ms._recording_manager._cached_mode = None
+                                        ms._recording_manager._cached_start_time = None
+                            except:
+                                pass
+                        
+                        if _recording_state_machine is not None:
+                            if result:
+                                _recording_state_machine.on_stop_success()
+                                logger.info("Worker: Recording stopped successfully")
+                            else:
+                                # Even if stop_recording returned False, we killed processes, so consider it a success
+                                _recording_state_machine.on_stop_success()
+                                logger.warning("Worker: stop_recording() returned False, but killed arecord processes anyway")
+                        else:
+                            logger.warning("Worker: State machine not initialized, cannot update state")
+                        
+                        # Check state after stopping (non-blocking to avoid deadlocks)
+                        try:
+                            state_after = ms._recording_manager.get_recording_state(blocking=False)
+                            logger.info(f"Worker: State after stop (non-blocking): {state_after}")
+                        except Exception as e:
+                            logger.debug(f"Worker: Could not check state after stop: {e}")
+                        
+                        logger.info("Worker: Stop operation complete, clearing in-progress flag")
                     except Exception as e:
-                        logger.warning(f"Failed to stop recording in background: {e}", exc_info=True)
+                        logger.error(f"Failed to stop recording in background: {e}", exc_info=True)
+                        # Even on error, try to kill arecord processes
+                        try:
+                            import menu_settings as ms
+                            config = load_config()
+                            audio_device = config.get("audio_device", "")
+                            if audio_device:
+                                logger.info(f"Worker: Error occurred, but killing arecord processes anyway")
+                                ms._recording_manager._kill_zombie_arecord_processes(audio_device)
+                        except:
+                            pass
             finally:
                 _recording_operation_in_progress.clear()  # Mark operation as complete
             _recording_queue.task_done()
         except Empty:
             # Timeout is normal - just continue the loop
-            continue
+            # Log occasionally to show worker is alive and check for stuck items
+            queue_size = _recording_queue.qsize()
+            if queue_size > 0:
+                logger.error(f"Worker: Queue has {queue_size} item(s) but get() timed out - queue might be corrupted or worker stuck!")
+                # Try to get the item without timeout to force processing
+                try:
+                    operation = _recording_queue.get_nowait()
+                    logger.info(f"Worker: Forced get_nowait() succeeded, got: {operation}")
+                    # Process it below
+                    if operation is None:
+                        logger.info("Worker: Received shutdown signal, exiting")
+                        break
+                    op_type, device, mode = operation
+                    logger.info(f"Worker: Got operation from queue (forced): {op_type}")
+                    _recording_operation_in_progress.set()
+                    # Process the operation - jump to the processing code
+                    try:
+                        if op_type == "start":
+                            try:
+                                start_recording(device, mode=mode)
+                            except Exception as e:
+                                logger.warning(f"Failed to start recording in background: {e}", exc_info=True)
+                        elif op_type == "stop":
+                            try:
+                                logger.info("Worker: Processing stop recording operation from queue (forced)")
+                                import menu_settings as ms
+                                logger.info("Worker: About to call stop_recording()")
+                                result = stop_recording()
+                                logger.info(f"Worker: stop_recording() returned: {result}")
+                                
+                                # Kill arecord processes
+                                config = load_config()
+                                audio_device = config.get("audio_device", "")
+                                if audio_device:
+                                    logger.info(f"Worker: Killing any remaining arecord processes for {audio_device}")
+                                    ms._recording_manager._kill_zombie_arecord_processes(audio_device)
+                                    with ms._recording_manager._lock:
+                                        ms._recording_manager._cached_is_recording = False
+                                        ms._recording_manager._cached_mode = None
+                                        ms._recording_manager._cached_start_time = None
+                            except Exception as e:
+                                logger.error(f"Failed to stop recording in background: {e}", exc_info=True)
+                    finally:
+                        _recording_operation_in_progress.clear()
+                        _recording_queue.task_done()
+                    continue  # Continue loop after processing
+                except queue_module.Empty:
+                    logger.error(f"Worker: get_nowait() also failed - queue is empty but qsize() says {queue_size} - queue state is inconsistent!")
+                    continue
+            else:
+                # Queue is empty, normal timeout - continue
+                continue
         except Exception as e:
             logger.error(f"Error in recording worker: {e}", exc_info=True)
             _recording_operation_in_progress.clear()  # Clear on error
             # Continue loop on errors
             continue
 
-# Start background worker thread
-_recording_thread = threading.Thread(target=_recording_worker, daemon=True)
-_recording_thread.start()
+# Start background worker thread (only if not already running)
+# Use the shared thread from menu_settings so it persists across page navigations
+if ms._recording_thread is None or not ms._recording_thread.is_alive():
+    ms._recording_thread = threading.Thread(target=_recording_worker, daemon=True)
+    ms._recording_thread.start()
+    logger.info("Started recording worker thread")
+_recording_thread = ms._recording_thread
 
 def _2():
-    # Manual record/stop (toggle)
-    global audio_device
-    config = load_config()
-    audio_device = config.get("audio_device", "")
-    
-    # Skip device validation to avoid blocking - just check if device is configured
-    if not audio_device:
-        # No device configured, can't record
-        return
-    
-    # Prevent multiple operations from being queued
-    # If an operation is already in progress, skip this one
-    if _recording_operation_in_progress.is_set():
-        # Operation already in progress, don't queue another
-        return
-    
-    # Check if queue is already full or has pending operations
-    # Limit queue size to prevent buildup
-    if _recording_queue.qsize() > 2:
-        # Too many operations queued, skip this one
-        return
-    
-    # Don't check recording state here - it might block if lock is held
-    # Just queue the operation and let the background thread handle state checking
-    # This ensures the button handler returns immediately
+    # Manual record/stop (toggle) - optimistic UI update pattern
+    # Update UI state immediately, then queue the operation
+    global audio_device, _recording_thread, names
     import pygame
+    import time
     
-    # Process events before starting to keep UI responsive
-    pygame.event.pump()
-    
-    # Try to get current state non-blocking to decide if we should start or stop
-    import menu_settings as ms
+    # Process events immediately to keep UI responsive
     try:
-        state = ms._recording_manager.get_recording_state(blocking=False)
-        if state and state['is_recording']:
-            # Currently recording (any mode) - queue stop
-            # The button should stop any active recording, not just manual ones
-            _recording_queue.put(("stop", None, None))
-            logger.debug(f"Queued stop operation (recording mode: {state.get('mode', 'unknown')})")
-        else:
-            # Not recording or can't get state - queue start
-            _recording_queue.put(("start", audio_device, "manual"))
-            logger.debug("Queued start operation")
-    except Exception as e:
-        # On error, try to check if recording is active using blocking call as fallback
-        logger.debug(f"Non-blocking state check failed: {e}, trying blocking check")
-        try:
-            # Fallback: use blocking check if non-blocking fails
-            state = ms._recording_manager.get_recording_state(blocking=True)
-            if state and state['is_recording']:
-                _recording_queue.put(("stop", None, None))
-                logger.debug("Queued stop operation (from blocking check)")
-            else:
-                _recording_queue.put(("start", audio_device, "manual"))
-                logger.debug("Queued start operation (from blocking check)")
-        except:
-            # If both fail, just queue start (safe default)
-            _recording_queue.put(("start", audio_device, "manual"))
-            logger.debug("Queued start operation (fallback)")
-    
-    # Process events after queuing operation to keep UI responsive
-    pygame.event.pump()
-    
-    # Don't call update_display() here - it might block on property getters
-    # Just update the display surface to show button was pressed
-    # The display will update when the user presses another button or when recording actually starts
-    try:
-        pygame.display.update()
         pygame.event.pump()
     except:
         pass
+    
+    # Get audio device - use cached config if available
+    try:
+        if 'config' in globals() and config:
+            audio_device = config.get("audio_device", "")
+        else:
+            config = load_config()
+            audio_device = config.get("audio_device", "")
+    except Exception as e:
+        logger.debug(f"Error loading config: {e}, using default")
+        audio_device = "plughw:0,0"
+    
+    if not audio_device:
+        logger.debug("No audio device configured, cannot record")
+        return
+    
+    # Check what the button currently says
+    try:
+        button_text = names[2] if 'names' in globals() and len(names) > 2 else ""
+    except:
+        button_text = ""
+    logger.info(f"Button text: '{button_text}'")
+    
+    # OPTIMISTIC UI UPDATE: Change state first, then do action
+    if "Stop" in str(button_text):
+        # User wants to stop - update UI immediately to show "Ready" and "Record"
+        try:
+            names[0] = "Ready"  # Update status immediately
+            names[2] = "Record"  # Update button text immediately
+            # Update state machine optimistically
+            if ms._recording_state_machine is not None:
+                try:
+                    ms._recording_state_machine.request_stop()
+                except:
+                    pass
+        except:
+            pass
+        
+        # Force immediate display update to show the change
+        try:
+            if 'screen' in globals() and screen is not None:
+                screen.fill(black)
+                draw_screen_border(screen)
+                # Quick redraw with new state
+                populate_screen(names, screen, b12=True, b34=True, b56=True, label1=True, 
+                              show_audio_meter=False, audio_level=0.0, 
+                              button_colors={})  # No red background when stopped
+                pygame.display.update()
+        except:
+            pass
+        
+        # NOW queue the actual stop operation (non-blocking)
+        try:
+            _recording_queue.put_nowait(("stop", None, None))
+            logger.info(f"Stop operation queued. Queue size: {_recording_queue.qsize()}, worker alive: {_recording_thread.is_alive()}")
+        except queue_module.Full:
+            _recording_queue.put(("stop", None, None), timeout=0.1)
+        return
+    
+    # Button says "Record" - update UI immediately to show "Recording" and "Stop"
+    try:
+        names[0] = "● Recording"  # Update status immediately
+        names[2] = "Stop"  # Update button text immediately
+        # Update state machine optimistically
+        if ms._recording_state_machine is not None:
+            try:
+                ms._recording_state_machine.request_start(audio_device, mode="manual")
+            except:
+                pass
+    except:
+        pass
+    
+    # Force immediate display update to show the change
+    try:
+        if 'screen' in globals() and screen is not None:
+            screen.fill(black)
+            draw_screen_border(screen)
+            # Quick redraw with new state - button should be red
+            populate_screen(names, screen, b12=True, b34=True, b56=True, label1=True,
+                          show_audio_meter=False, audio_level=0.0,
+                          button_colors={2: red})  # Red background for record button
+            pygame.display.update()
+    except:
+        pass
+    
+    # NOW queue the actual start operation (non-blocking)
+    try:
+        _recording_queue.put_nowait(("start", audio_device, "manual"))
+        logger.info(f"Start operation queued. Queue size: {_recording_queue.qsize()}, worker alive: {_recording_thread.is_alive()}")
+    except queue_module.Full:
+        _recording_queue.put(("start", audio_device, "manual"), timeout=0.1)
+    return
 
 def _3():
     # Settings (button 3)
@@ -351,6 +575,47 @@ def update_display():
         is_currently_recording = state['is_recording']
         current_mode = state['mode']
         recording_start_time = state['start_time']
+        
+        # Fallback: If state says not recording, check for arecord processes
+        # This handles cases where state is stale but recording is actually active
+        # BUT: Only check if cached state also says not recording (to avoid overriding cleared state)
+        if not is_currently_recording and device_valid:
+            # Check if cached state was intentionally cleared (both False means cleared, not stale)
+            try:
+                cached_is_recording = ms._recording_manager._cached_is_recording
+                # If both actual and cached state say False, trust it (state was intentionally cleared)
+                # Only check arecord if cached state is True but actual is False (stale state)
+                if cached_is_recording and not is_currently_recording:
+                    # Cached says recording but actual says not - might be stale, check arecord
+                    try:
+                        import subprocess
+                        result = subprocess.run(["pgrep", "-f", f"arecord.*-D.*{audio_device}"], 
+                                              capture_output=True, timeout=0.1)
+                        if result.returncode == 0 and result.stdout.strip():
+                            # arecord is running but state says not recording - state is stale
+                            logger.debug("State says not recording but arecord process found - using arecord as truth")
+                            is_currently_recording = True
+                            # Try to get mode from state, default to manual
+                            if current_mode is None:
+                                current_mode = "manual"
+                            # If start_time is None, try to estimate it from file modification time
+                            if recording_start_time is None:
+                                try:
+                                    from pathlib import Path
+                                    recordings_dir = Path(ms._recording_manager.recording_dir)
+                                    if recordings_dir.exists():
+                                        wav_files = list(recordings_dir.glob("recording_*.wav"))
+                                        if wav_files:
+                                            wav_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                                            most_recent = wav_files[0]
+                                            recording_start_time = most_recent.stat().st_mtime
+                                except:
+                                    pass
+                    except:
+                        pass  # If pgrep fails, just use the state we got
+                # If both cached and actual say False, trust it - don't check arecord
+            except:
+                pass  # If check fails, just use the state we got
     except Exception as e:
         logger.debug(f"Error getting recording state: {e}")
         is_currently_recording = False

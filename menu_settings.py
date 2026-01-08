@@ -104,7 +104,16 @@ recording_process = None  # Deprecated
 silentjack_process = None  # Deprecated
 recording_start_time = None  # Deprecated
 recording_filename = None  # Deprecated
-recording_mode = None  # Deprecated
+recording_mode = None
+
+# Recording queue and worker thread - shared across all pages
+# These must be in menu_settings.py so they persist when pages are loaded via exec()
+from queue import Queue
+import threading
+_recording_queue = None  # Will be initialized on first use
+_recording_thread = None  # Will be initialized on first use
+_recording_operation_in_progress = None  # Will be initialized on first use
+_recording_state_machine = None  # Will be initialized on first use  # Deprecated
 is_recording = False  # Deprecated
 
 # Lock for legacy compatibility
@@ -166,13 +175,61 @@ def go_to_page(p):
         logger.error(f"Page file not found: {p}")
         return
     
-    # Read and execute the page file in the current namespace
-    # This preserves all global state including RecordingManager
+    # Read and execute the page file
+    # Use an isolated namespace that imports from the current globals
+    # This preserves RecordingManager and other shared state while preventing
+    # pages from directly modifying each other's variables
     try:
         with open(page, 'r') as f:
             page_code = f.read()
-        # Execute in the current global namespace to preserve state
-        exec(compile(page_code, str(page), 'exec'), globals())
+        
+        # Create an isolated namespace that has access to shared state
+        # Pages can read shared state but cannot modify each other's variables
+        # Import key modules and objects that pages need
+        page_globals = {}
+        
+        # Copy essential builtins
+        import builtins
+        page_globals['__builtins__'] = builtins
+        page_globals['__name__'] = '__main__'
+        page_globals['__file__'] = str(page)
+        
+        # Import shared modules (pages can import from them)
+        page_globals['menu_settings'] = sys.modules.get('menu_settings', __import__('menu_settings'))
+        
+        # Copy shared objects and functions that pages need
+        # These are references, so pages can use them but changes to the objects
+        # themselves will be visible to other pages (which is what we want for shared state)
+        shared_items = [
+            '_recording_manager',  # Shared RecordingManager instance
+            'load_config', 'save_config',  # Config functions
+            'get_audio_devices', 'get_disk_space', 'get_current_device_config',  # Device functions
+            'run_cmd',  # Command execution
+            'logger',  # Logger
+            'init', 'update_activity',  # Display functions
+            'draw_screen_border', 'populate_screen', 'make_button', 'on_touch',  # UI functions
+            'go_to_page',  # Navigation function
+            'screen',  # Display surface
+            'black', 'white', 'red', 'green', 'tron_light', 'tron_inverse',  # Colors
+            'PAGE_01', 'PAGE_02', 'PAGE_03', 'PAGE_04', 'PAGE_05', 'SCREEN_OFF',  # Page constants
+            # Recording queue and thread - need to access the actual module's globals
+            # These are in 01_menu_run.py's namespace, so we need to import them
+        ]
+        
+        for item in shared_items:
+            if item in globals():
+                page_globals[item] = globals()[item]
+        
+        # Import pygame and other common modules
+        page_globals['pygame'] = __import__('pygame')
+        page_globals['os'] = __import__('os')
+        page_globals['sys'] = sys
+        page_globals['time'] = __import__('time')
+        page_globals['Path'] = __import__('pathlib').Path
+        
+        # Execute in the isolated namespace
+        # Pages can use 'from menu_settings import *' to get additional functions if needed
+        exec(compile(page_code, str(page), 'exec'), page_globals)
     except Exception as e:
         logger.error(f"Error loading page {p}: {e}", exc_info=True)
         # Fallback to old method if exec fails
@@ -480,8 +537,14 @@ def stop_recording():
     """Stop audio recording and rename file with duration (wrapper for RecordingManager)"""
     global recording_process, recording_start_time, recording_mode, is_recording, recording_filename
     
+    logger.info("stop_recording() wrapper called - about to call RecordingManager.stop_recording()")
     # Use RecordingManager to stop recording
-    success = _recording_manager.stop_recording()
+    try:
+        success = _recording_manager.stop_recording()
+        logger.info(f"stop_recording() wrapper - RecordingManager returned: {success}")
+    except Exception as e:
+        logger.error(f"stop_recording() wrapper - Exception calling RecordingManager: {e}", exc_info=True)
+        success = False
     
     # Update legacy globals for backward compatibility
     with _recording_lock:

@@ -103,11 +103,58 @@ class RecordingManager:
                     self._lock.release()
             else:
                 # Lock is held - return cached state (may be slightly stale but won't block)
-                return {
+                # Also check if arecord process is actually running as a fallback
+                cached_state = {
                     'is_recording': self._cached_is_recording,
                     'mode': self._cached_mode,
                     'start_time': self._cached_start_time
                 }
+                # If cache says not recording, double-check with process check
+                if not self._cached_is_recording:
+                    # Quick check if arecord is running (non-blocking)
+                    try:
+                        import subprocess
+                        # Try to get device from config to check more specifically
+                        try:
+                            from menu_settings import load_config
+                            config = load_config()
+                            audio_device = config.get("audio_device", "")
+                            if audio_device:
+                                # Check for arecord with this specific device
+                                result = subprocess.run(["pgrep", "-f", f"arecord.*-D.*{audio_device}"], 
+                                                        capture_output=True, timeout=0.05)
+                                if result.returncode == 0 and result.stdout.strip():
+                                    # arecord is running but cache says not recording - return corrected state
+                                    logger.debug("Found arecord process but cache says not recording - cache may be stale")
+                                    # Try to estimate start time from file modification time
+                                    start_time_estimate = None
+                                    try:
+                                        from pathlib import Path
+                                        recordings_dir = Path(self.recording_dir)
+                                        if recordings_dir.exists():
+                                            wav_files = list(recordings_dir.glob("recording_*.wav"))
+                                            if wav_files:
+                                                # Get most recent file
+                                                wav_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                                                most_recent = wav_files[0]
+                                                # Estimate start time from file modification time
+                                                start_time_estimate = most_recent.stat().st_mtime
+                                    except:
+                                        pass
+                                    if start_time_estimate is None:
+                                        import time
+                                        start_time_estimate = time.time()
+                                    # Return corrected state with estimated start time
+                                    return {
+                                        'is_recording': True,
+                                        'mode': 'manual',  # Default to manual if unknown
+                                        'start_time': start_time_estimate
+                                    }
+                        except:
+                            pass
+                    except:
+                        pass
+                return cached_state
     
     def _kill_zombie_arecord_processes(self, device):
         """Kill any zombie arecord processes that might be holding the device"""
@@ -289,6 +336,7 @@ class RecordingManager:
     
     def stop_recording(self):
         """Stop audio recording and rename file with duration"""
+        logger.info("RecordingManager.stop_recording() called - entering function")
         # Get process and state while holding lock (quick operations only)
         recording_process = None
         recording_filename = None
@@ -296,30 +344,111 @@ class RecordingManager:
         recording_mode = None
         needs_silentjack_stop = False
         
+        logger.info("RecordingManager.stop_recording() - about to acquire lock")
         with self._lock:
-            if not self._is_recording:
-                return False
-            
-            # Capture state for operations outside the lock
+            logger.info(f"RecordingManager.stop_recording() - inside lock: _is_recording={self._is_recording}, _recording_process={self._recording_process is not None}")
+            # Capture any process that exists, even if _is_recording is False
+            # This handles cases where state is out of sync
             recording_process = self._recording_process
             recording_filename = self._recording_filename
             recording_start_time = self._recording_start_time
             recording_mode = self._recording_mode
             
-            # Check if we need to stop silentjack (quick check)
-            needs_silentjack_stop = (recording_mode == "auto" and self.recording_pid_file.exists())
-            
-            # Clear state immediately (before waiting for process)
-            self._recording_process = None
-            self._recording_filename = None
-            self._recording_start_time = None
-            self._recording_mode = None
-            self._is_recording = False
-            self._cached_is_recording = False
-            self._cached_mode = None
-            self._cached_start_time = None
+            if not self._is_recording:
+                logger.warning("stop_recording() called but _is_recording is False")
+                # Even if _is_recording is False, if there's a process, we should kill it
+                if recording_process is not None:
+                    logger.warning("stop_recording() called but _is_recording is False, but _recording_process exists - will kill process anyway")
+                    # Clear the process reference
+                    self._recording_process = None
+                    self._recording_filename = None
+                    self._recording_start_time = None
+                    self._recording_mode = None
+                    # Set needs_silentjack_stop to False since we don't know the mode
+                    needs_silentjack_stop = False
+                    # Don't return here - continue to kill the process below
+                else:
+                    # No process reference, but check if arecord is actually running
+                    # This handles cases where state is out of sync
+                    logger.warning("stop_recording() called but _is_recording is False and no process reference")
+                    logger.info("Checking for running arecord processes as fallback...")
+                    # We'll check for arecord processes outside the lock
+                    # Set a flag to indicate we should check
+                    should_check_arecord = True
+                    # Don't return yet - we'll check arecord processes below
+            else:
+                logger.info(f"Stopping recording (mode: {self._recording_mode}, filename: {self._recording_filename})")
+                # Check if we need to stop silentjack (quick check)
+                needs_silentjack_stop = (recording_mode == "auto" and self.recording_pid_file.exists())
+                
+                # Clear state immediately (before waiting for process)
+                self._recording_process = None
+                self._recording_filename = None
+                self._recording_start_time = None
+                self._recording_mode = None
+                self._is_recording = False
+                self._cached_is_recording = False
+                self._cached_mode = None
+                self._cached_start_time = None
+                logger.info("State cleared in stop_recording()")
         
         # Release lock before blocking operations
+        
+        # If we didn't have a process reference but _is_recording was False,
+        # check for arecord processes as a fallback
+        if recording_process is None and not self._is_recording:
+            logger.info("No process reference and state says not recording, checking for arecord processes...")
+            # Get the device from config to check for arecord processes
+            try:
+                from menu_settings import load_config
+                config = load_config()
+                audio_device = config.get("audio_device", "")
+                if audio_device:
+                    # Check for arecord processes
+                    import subprocess
+                    result = subprocess.run(["pgrep", "-f", f"arecord.*-D.*{audio_device}"], 
+                                          capture_output=True, timeout=0.1)
+                    if result.returncode == 0 and result.stdout.strip():
+                        logger.warning(f"Found arecord process running but no process reference - killing it")
+                        # Kill the arecord processes
+                        self._kill_zombie_arecord_processes(audio_device)
+                        # Clear BOTH cached state AND actual state since we just killed the process
+                        with self._lock:
+                            # Clear actual state
+                            self._is_recording = False
+                            self._recording_process = None
+                            self._recording_filename = None
+                            self._recording_start_time = None
+                            self._recording_mode = None
+                            # Clear cached state
+                            self._cached_is_recording = False
+                            self._cached_mode = None
+                            self._cached_start_time = None
+                            logger.info("Cleared both actual and cached state after killing arecord processes")
+                        # Try to find the most recent recording file and rename it if possible
+                        # This is best-effort since we don't have the filename
+                        try:
+                            from pathlib import Path
+                            recordings_dir = Path(self.recording_dir)
+                            if recordings_dir.exists():
+                                # Find the most recent .wav file that starts with "recording_"
+                                wav_files = list(recordings_dir.glob("recording_*.wav"))
+                                if wav_files:
+                                    # Sort by modification time, most recent first
+                                    wav_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                                    most_recent = wav_files[0]
+                                    # Try to get duration from file size or use a default
+                                    # For now, just log it
+                                    logger.info(f"Most recent recording file: {most_recent}")
+                        except:
+                            pass
+                        return True  # Consider it successful if we killed the process
+                    else:
+                        logger.info("No arecord processes found - nothing to stop")
+                        return False
+            except Exception as e:
+                logger.error(f"Error checking for arecord processes: {e}", exc_info=True)
+                return False
         
         success = True
         
@@ -329,21 +458,27 @@ class RecordingManager:
         
         # Stop our own recording process (outside lock to avoid blocking)
         if recording_process is not None:
+            logger.info(f"Terminating recording process (PID: {recording_process.pid if hasattr(recording_process, 'pid') else 'unknown'})")
             try:
                 recording_process.terminate()
+                logger.info("Sent terminate signal to recording process")
                 recording_process.wait(timeout=PROCESS_TERMINATE_TIMEOUT)
-                logger.debug("Recording process terminated gracefully")
+                logger.info("Recording process terminated gracefully")
             except TimeoutExpired:
-                logger.warning("Recording process did not terminate, killing...")
+                logger.warning("Recording process did not terminate within timeout, killing...")
                 try:
                     recording_process.kill()
+                    logger.info("Sent kill signal to recording process")
                     recording_process.wait(timeout=PROCESS_KILL_DELAY)
+                    logger.info("Recording process killed")
                 except TimeoutExpired:
                     logger.warning("Process did not die after kill, continuing...")
                 except Exception as e:
-                    logger.error(f"Error killing recording process: {e}")
+                    logger.error(f"Error killing recording process: {e}", exc_info=True)
             except Exception as e:
-                logger.error(f"Error terminating recording process: {e}")
+                logger.error(f"Error terminating recording process: {e}", exc_info=True)
+        else:
+            logger.warning("No recording process to stop (recording_process is None)")
             
             # Rename file with duration (outside lock)
             if recording_filename and recording_filename.exists():

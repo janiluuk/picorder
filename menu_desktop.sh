@@ -25,6 +25,28 @@ cd "$SCRIPT_DIR" || exit 1
 echo "Starting Picorder on desktop..."
 echo "DISPLAY=$DISPLAY"
 echo "Working directory: $SCRIPT_DIR"
+echo ""
+
+# Create virtualenv if it doesn't exist
+if [ ! -d "venv" ]; then
+    echo "Creating virtualenv 'venv'..."
+    python3 -m venv venv
+fi
+
+# Activate virtualenv
+echo "Activating virtualenv..."
+source venv/bin/activate
+
+# Install requirements if requirements.txt exists
+if [ -f "requirements.txt" ]; then
+    echo "Installing requirements from requirements.txt..."
+    pip install -r requirements.txt
+else
+    echo "requirements.txt not found. Installing pygame directly..."
+    pip install pygame
+fi
+
+echo ""
 
 # Run the menu application
 python3 "$SCRIPT_DIR/01_menu_run.py" 2>&1
