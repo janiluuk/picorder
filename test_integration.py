@@ -126,7 +126,7 @@ class TestRecordingIntegration(unittest.TestCase):
             self.assertIsInstance(status, str)
             self.assertIsInstance(duration, int)
 
-    @patch('subprocess.Popen')
+    @patch('recording_manager.Popen')
     def test_start_recording_device_validation(self, mock_popen):
         """Test that start_recording validates device before recording"""
         mock_process = MagicMock()
@@ -161,7 +161,7 @@ class TestRecordingWorkflows(unittest.TestCase):
         """Clean up test fixtures"""
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    @patch('subprocess.Popen')
+    @patch('recording_manager.Popen')
     def test_manual_recording_workflow(self, mock_popen):
         """Test complete manual recording workflow"""
         mock_process = MagicMock()
@@ -234,7 +234,7 @@ class TestThreadSafety(unittest.TestCase):
         """Clean up test fixtures"""
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    @patch('subprocess.Popen')
+    @patch('recording_manager.Popen')
     def test_concurrent_start_stop(self, mock_popen):
         """Test concurrent start/stop operations"""
         mock_process = MagicMock()

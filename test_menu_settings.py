@@ -98,17 +98,17 @@ class TestMenuSettings(unittest.TestCase):
         result = menu_settings.check_service("")
         self.assertFalse(result)
 
-    @patch('menu_settings.getoutput')
-    def test_check_service_vnc_running(self, mock_getoutput):
+    @patch('menu_settings.run_cmd')
+    def test_check_service_vnc_running(self, mock_run_cmd):
         """Test check_service for VNC when running"""
-        mock_getoutput.return_value = "pi 1234 vnc :1"
+        mock_run_cmd.return_value = "pi 1234 vnc :1"
         result = menu_settings.check_service("vnc")
         self.assertTrue(result)
 
-    @patch('menu_settings.getoutput')
-    def test_check_service_vnc_not_running(self, mock_getoutput):
+    @patch('menu_settings.run_cmd')
+    def test_check_service_vnc_not_running(self, mock_run_cmd):
         """Test check_service for VNC when not running"""
-        mock_getoutput.return_value = "pi 1234 other process"
+        mock_run_cmd.return_value = "pi 1234 other process"
         result = menu_settings.check_service("vnc")
         self.assertFalse(result)
 
