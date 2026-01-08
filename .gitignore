@@ -3,3 +3,22 @@
 
 # Python
 *.pyc
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Runtime files
+.recording_*
+silentjack_monitor.sh
+config.json
+
+# Logs
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

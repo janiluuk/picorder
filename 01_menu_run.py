@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
-from sys import argv as __argv__
 from menu_settings import *
 import threading
-
-# Import constants
-from menu_settings import AUTO_RECORD_POLL_INTERVAL, FILE_CHECK_INTERVAL
 
 ################################################################################
 # Recording menu - main interface

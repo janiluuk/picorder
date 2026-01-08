@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from sys import argv as __argv__
 from menu_settings import *
 
 ################################################################################

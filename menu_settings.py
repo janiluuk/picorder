@@ -1,4 +1,4 @@
-from subprocess import Popen, PIPE, call, getoutput, TimeoutExpired
+from subprocess import Popen, PIPE, TimeoutExpired
 from pygame.locals import KEYDOWN, K_ESCAPE
 import pygame
 import time
@@ -70,16 +70,7 @@ _recording_manager = RecordingManager(
     menu_dir=str(MENUDIR)
 )
 
-# Legacy global variables for backward compatibility (deprecated - use RecordingManager)
-# These are kept for compatibility but will be removed in future versions
-recording_process = None  # Deprecated
-silentjack_process = None  # Deprecated
-recording_start_time = None  # Deprecated
-recording_filename = None  # Deprecated
-recording_mode = None  # Deprecated
-is_recording = False  # Deprecated
-
-# Lock for legacy compatibility
+# Lock for thread safety
 _recording_lock = _recording_manager._lock
 
 # Activity tracking
@@ -347,7 +338,6 @@ def get_audio_level(device, sample_duration=0.05):
 
 def start_recording(device, mode="manual"):
     """Start audio recording (wrapper for RecordingManager)"""
-    global recording_process, recording_start_time, recording_mode, is_recording, recording_filename
     
     # Validate device before attempting to record
     if not device or device == "":
@@ -370,37 +360,15 @@ def start_recording(device, mode="manual"):
         return False
     
     # Use RecordingManager to start recording
-    success = _recording_manager.start_recording(device, mode)
-    
-    # Update legacy globals for backward compatibility
-    if success:
-        with _recording_lock:
-            is_recording = True
-            recording_mode = mode
-            recording_start_time = _recording_manager.recording_start_time
-            # Note: recording_process and recording_filename are now internal to RecordingManager
-    
-    return success
+    return _recording_manager.start_recording(device, mode)
 
 def start_silentjack(device):
     """Start silentjack monitoring process (wrapper for RecordingManager)"""
-    global silentjack_process
-    # Use RecordingManager
-    success = _recording_manager.start_silentjack(device)
-    # Update legacy global for backward compatibility (internal access needed for legacy code)
-    if success:
-        # Access internal process for legacy compatibility (not recommended for new code)
-        with _recording_lock:
-            silentjack_process = _recording_manager._silentjack_process
-    return success
+    return _recording_manager.start_silentjack(device)
 
 def stop_silentjack():
     """Stop silentjack monitoring process (wrapper for RecordingManager)"""
-    global silentjack_process
-    # Use RecordingManager
-    success = _recording_manager.stop_silentjack()
-    silentjack_process = None  # Clear legacy global
-    return success
+    return _recording_manager.stop_silentjack()
 
 def create_silentjack_script(device):
     """Create script that silentjack will call when jack is inserted/removed (wrapper for RecordingManager)"""
@@ -408,20 +376,7 @@ def create_silentjack_script(device):
 
 def stop_recording():
     """Stop audio recording and rename file with duration (wrapper for RecordingManager)"""
-    global recording_process, recording_start_time, recording_mode, is_recording, recording_filename
-    
-    # Use RecordingManager to stop recording
-    success = _recording_manager.stop_recording()
-    
-    # Update legacy globals for backward compatibility
-    with _recording_lock:
-        is_recording = _recording_manager.is_recording
-        recording_mode = _recording_manager.recording_mode
-        recording_start_time = _recording_manager.recording_start_time
-        recording_process = None  # No longer accessible directly
-        recording_filename = None  # No longer accessible directly
-    
-    return success
+    return _recording_manager.stop_recording()
 
 def rename_with_duration(filename, duration_seconds):
     """Rename a recording file to include duration in the name (wrapper for RecordingManager)"""
@@ -429,18 +384,7 @@ def rename_with_duration(filename, duration_seconds):
 
 def get_recording_status():
     """Get recording status and duration (wrapper for RecordingManager)"""
-    global is_recording, recording_start_time, recording_mode
-    
-    # Use RecordingManager to get status
-    status, duration = _recording_manager.get_recording_status()
-    
-    # Update legacy globals for backward compatibility
-    with _recording_lock:
-        is_recording = _recording_manager.is_recording
-        recording_mode = _recording_manager.recording_mode
-        recording_start_time = _recording_manager.recording_start_time
-    
-    return status, duration
+    return _recording_manager.get_recording_status()
 
 def check_silence(device, duration=20):
     """Check if there's been silence for specified duration (for manual recording)"""
@@ -514,7 +458,8 @@ def check_service(srvc):
         return False
 
     if srvc == "vnc":
-        if 'vnc :1' in getoutput('/bin/ps -ef'):
+        ps_output = run_cmd(['/bin/ps', '-ef'])
+        if 'vnc :1' in ps_output:
             return True
         else:
             return False
@@ -720,11 +665,6 @@ def run_cmd(cmd):
     except Exception as e:
         logger.error(f"Unexpected error running command {cmd}: {e}", exc_info=True)
         return ""
-
-def run_proc(proc, f, a):
-    pygame.quit()
-    process = call(proc, shell=True)
-    os.execv(f, a)
 
 # Define each button press action
 def button(number, _1, _2, _3, _4, _5, _6):
