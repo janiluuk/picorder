@@ -177,6 +177,7 @@ def _recording_worker():
                         if result:
                             # Success - optimistic state was correct, just clear pending flag
                             ms._optimistic_recording_state['pending_start'] = False
+                            ms._optimistic_recording_state['pending_stop'] = False  # Clear any pending stop
                             if ms._recording_state_machine is not None:
                                 ms._recording_state_machine.on_start_success()
                             logger.info("Worker: Recording started successfully")
@@ -186,6 +187,7 @@ def _recording_worker():
                             ms._optimistic_recording_state['mode'] = None
                             ms._optimistic_recording_state['start_time'] = None
                             ms._optimistic_recording_state['pending_start'] = False
+                            ms._optimistic_recording_state['pending_stop'] = False
                             if ms._recording_state_machine is not None:
                                 ms._recording_state_machine.on_start_failure("start_recording() returned False")
                             logger.warning("Worker: Recording start failed")
@@ -195,79 +197,114 @@ def _recording_worker():
                             ms._recording_state_machine.on_start_failure(error_msg)
                         logger.warning(f"Failed to start recording in background: {e}", exc_info=True)
                 elif op_type == "stop":
+                    # ROBUST STOP: Always kill arecord processes, regardless of state
+                    logger.info("Worker: Processing stop recording operation from queue - ROBUST MODE")
+                    import menu_settings as ms
+                    import time
+                    import subprocess
+                    
+                    # Step 1: Get device from config (non-blocking)
+                    config = None
+                    audio_device = None
                     try:
-                        logger.info("Worker: Processing stop recording operation from queue")
-                        # Don't check state before stopping - it might block
-                        # Just call stop_recording() directly
-                        import menu_settings as ms
-                        logger.info("Worker: About to call stop_recording()")
-                        
-                        # Always try to stop, even if state says not recording
-                        result = stop_recording()
-                        logger.info(f"Worker: stop_recording() returned: {result}")
-                        
-                        # Even if stop_recording returns False, kill any arecord processes
-                        # This handles cases where state is out of sync
                         config = load_config()
                         audio_device = config.get("audio_device", "")
-                        if audio_device:
-                            logger.info(f"Worker: Killing any remaining arecord processes for {audio_device} (regardless of stop_recording result)")
+                    except Exception as e:
+                        logger.warning(f"Worker: Could not load config for stop: {e}")
+                    
+                    # Step 2: Call stop_recording() first (handles state cleanup)
+                    result = False
+                    try:
+                        logger.info("Worker: Calling stop_recording()...")
+                        result = stop_recording()
+                        logger.info(f"Worker: stop_recording() returned: {result}")
+                    except Exception as e:
+                        logger.error(f"Worker: stop_recording() raised exception: {e}", exc_info=True)
+                    
+                    # Step 3: ALWAYS kill arecord processes, regardless of stop_recording() result
+                    # This ensures recording stops even if state is out of sync
+                    if audio_device:
+                        logger.info(f"Worker: Aggressively killing all arecord processes for {audio_device}")
+                        try:
+                            # Kill zombie processes (this is the most reliable way)
                             ms._recording_manager._kill_zombie_arecord_processes(audio_device)
-                            # Clear cached state after killing processes
+                            
+                            # Clear ALL state (both actual and cached) after killing
                             with ms._recording_manager._lock:
+                                ms._recording_manager._is_recording = False
+                                ms._recording_manager._recording_process = None
+                                ms._recording_manager._recording_filename = None
+                                ms._recording_manager._recording_start_time = None
+                                ms._recording_manager._recording_mode = None
                                 ms._recording_manager._cached_is_recording = False
                                 ms._recording_manager._cached_mode = None
                                 ms._recording_manager._cached_start_time = None
-                            # Give it a moment for processes to die
-                            import time
-                            time.sleep(0.1)
-                            # Double-check and kill again if needed
+                                logger.info("Worker: Cleared all recording state (actual + cached)")
+                            
+                            # Wait a moment for processes to die
+                            time.sleep(0.15)
+                            
+                            # Double-check: verify no arecord processes remain
                             try:
-                                import subprocess
-                                result = subprocess.run(["pgrep", "-f", f"arecord.*-D.*{audio_device}"], 
-                                                      capture_output=True, timeout=0.1)
-                                if result.returncode == 0 and result.stdout.strip():
-                                    logger.warning(f"Worker: Still found arecord processes after kill, killing again")
+                                pgrep_result = subprocess.run(
+                                    ["pgrep", "-f", f"arecord.*-D.*{audio_device}"], 
+                                    capture_output=True, 
+                                    timeout=0.2
+                                )
+                                if pgrep_result.returncode == 0 and pgrep_result.stdout.strip():
+                                    pids = pgrep_result.stdout.decode().strip().split('\n')
+                                    logger.warning(f"Worker: Still found {len(pids)} arecord process(es) after kill: {pids}")
+                                    # Kill again more aggressively
                                     ms._recording_manager._kill_zombie_arecord_processes(audio_device)
-                                    # Clear cached state again
-                                    with ms._recording_manager._lock:
-                                        ms._recording_manager._cached_is_recording = False
-                                        ms._recording_manager._cached_mode = None
-                                        ms._recording_manager._cached_start_time = None
-                            except:
-                                pass
-                        
-                        if _recording_state_machine is not None:
-                            if result:
-                                _recording_state_machine.on_stop_success()
-                                logger.info("Worker: Recording stopped successfully")
-                            else:
-                                # Even if stop_recording returned False, we killed processes, so consider it a success
-                                _recording_state_machine.on_stop_success()
-                                logger.warning("Worker: stop_recording() returned False, but killed arecord processes anyway")
-                        else:
-                            logger.warning("Worker: State machine not initialized, cannot update state")
-                        
-                        # Check state after stopping (non-blocking to avoid deadlocks)
-                        try:
-                            state_after = ms._recording_manager.get_recording_state(blocking=False)
-                            logger.info(f"Worker: State after stop (non-blocking): {state_after}")
+                                    time.sleep(0.1)
+                                    # Final check
+                                    pgrep_result2 = subprocess.run(
+                                        ["pgrep", "-f", f"arecord.*-D.*{audio_device}"], 
+                                        capture_output=True, 
+                                        timeout=0.2
+                                    )
+                                    if pgrep_result2.returncode == 0 and pgrep_result2.stdout.strip():
+                                        logger.error(f"Worker: arecord processes STILL running after double-kill!")
+                                    else:
+                                        logger.info("Worker: All arecord processes killed on second attempt")
+                                else:
+                                    logger.info("Worker: Verified - no arecord processes remain")
+                            except Exception as e:
+                                logger.warning(f"Worker: Could not verify arecord processes killed: {e}")
                         except Exception as e:
-                            logger.debug(f"Worker: Could not check state after stop: {e}")
-                        
-                        logger.info("Worker: Stop operation complete, clearing in-progress flag")
+                            logger.error(f"Worker: Error killing arecord processes: {e}", exc_info=True)
+                    else:
+                        logger.warning("Worker: No audio device configured, cannot kill arecord processes")
+                    
+                    # Step 4: Update optimistic state to reflect stop
+                    try:
+                        ms._optimistic_recording_state['is_recording'] = False
+                        ms._optimistic_recording_state['mode'] = None
+                        ms._optimistic_recording_state['start_time'] = None
+                        ms._optimistic_recording_state['pending_stop'] = False
+                        ms._optimistic_recording_state['pending_start'] = False
+                        logger.info("Worker: Updated optimistic state to 'not recording'")
                     except Exception as e:
-                        logger.error(f"Failed to stop recording in background: {e}", exc_info=True)
-                        # Even on error, try to kill arecord processes
+                        logger.warning(f"Worker: Could not update optimistic state: {e}")
+                    
+                    # Step 5: Update state machine
+                    if _recording_state_machine is not None:
                         try:
-                            import menu_settings as ms
-                            config = load_config()
-                            audio_device = config.get("audio_device", "")
-                            if audio_device:
-                                logger.info(f"Worker: Error occurred, but killing arecord processes anyway")
-                                ms._recording_manager._kill_zombie_arecord_processes(audio_device)
-                        except:
-                            pass
+                            _recording_state_machine.on_stop_success()
+                            logger.info("Worker: State machine updated to IDLE")
+                        except Exception as e:
+                            logger.warning(f"Worker: Could not update state machine: {e}")
+                    else:
+                        logger.warning("Worker: State machine not initialized")
+                    
+                    # Step 6: Final verification (non-blocking)
+                    try:
+                        state_after = ms._recording_manager.get_recording_state(blocking=False)
+                        logger.info(f"Worker: Final state check: {state_after}")
+                    except Exception as e:
+                        logger.debug(f"Worker: Could not check final state: {e}")
+                    
+                    logger.info("Worker: Stop operation COMPLETE - all processes killed, state cleared")
             finally:
                 _recording_operation_in_progress.clear()  # Mark operation as complete
             _recording_queue.task_done()
@@ -296,25 +333,62 @@ def _recording_worker():
                             except Exception as e:
                                 logger.warning(f"Failed to start recording in background: {e}", exc_info=True)
                         elif op_type == "stop":
+                            # Use the same robust stop logic as above
+                            logger.info("Worker: Processing stop recording operation from queue (forced) - ROBUST MODE")
+                            import menu_settings as ms
+                            import time
+                            import subprocess
+                            
                             try:
-                                logger.info("Worker: Processing stop recording operation from queue (forced)")
-                                import menu_settings as ms
-                                logger.info("Worker: About to call stop_recording()")
+                                # Get device
+                                config = load_config()
+                                audio_device = config.get("audio_device", "")
+                                
+                                # Call stop_recording()
                                 result = stop_recording()
                                 logger.info(f"Worker: stop_recording() returned: {result}")
                                 
-                                # Kill arecord processes
-                                config = load_config()
-                                audio_device = config.get("audio_device", "")
+                                # Always kill arecord processes
                                 if audio_device:
-                                    logger.info(f"Worker: Killing any remaining arecord processes for {audio_device}")
                                     ms._recording_manager._kill_zombie_arecord_processes(audio_device)
                                     with ms._recording_manager._lock:
+                                        ms._recording_manager._is_recording = False
+                                        ms._recording_manager._recording_process = None
+                                        ms._recording_manager._recording_filename = None
+                                        ms._recording_manager._recording_start_time = None
+                                        ms._recording_manager._recording_mode = None
                                         ms._recording_manager._cached_is_recording = False
                                         ms._recording_manager._cached_mode = None
                                         ms._recording_manager._cached_start_time = None
+                                    
+                                    # Update optimistic state
+                                    ms._optimistic_recording_state['is_recording'] = False
+                                    ms._optimistic_recording_state['mode'] = None
+                                    ms._optimistic_recording_state['start_time'] = None
+                                    ms._optimistic_recording_state['pending_stop'] = False
+                                    ms._optimistic_recording_state['pending_start'] = False
+                                    
+                                    time.sleep(0.15)
+                                    
+                                    # Verify kill
+                                    pgrep_result = subprocess.run(
+                                        ["pgrep", "-f", f"arecord.*-D.*{audio_device}"], 
+                                        capture_output=True, 
+                                        timeout=0.2
+                                    )
+                                    if pgrep_result.returncode == 0 and pgrep_result.stdout.strip():
+                                        logger.warning("Worker: Still found arecord processes, killing again")
+                                        ms._recording_manager._kill_zombie_arecord_processes(audio_device)
                             except Exception as e:
                                 logger.error(f"Failed to stop recording in background: {e}", exc_info=True)
+                                # Even on error, try to kill processes
+                                try:
+                                    config = load_config()
+                                    audio_device = config.get("audio_device", "")
+                                    if audio_device:
+                                        ms._recording_manager._kill_zombie_arecord_processes(audio_device)
+                                except:
+                                    pass
                     finally:
                         _recording_operation_in_progress.clear()
                         _recording_queue.task_done()
@@ -344,46 +418,64 @@ def _2():
     # Only queue operation - all state updates happen in worker/display callback
     global audio_device, _recording_thread
     
-    # Use cached audio_device from module level (set at startup)
-    # Don't load config here - it might block
-    device = audio_device if audio_device else "plughw:0,0"
-    
-    if not device:
+    # Bug 1 Fix: Check audio_device BEFORE assigning default
+    # Only use default if audio_device is empty/None, but still check if device is valid
+    if not audio_device:
+        # No device configured - can't record
+        logger.warning("No audio device configured, cannot start recording")
         return
+    
+    device = audio_device  # Use configured device, no fallback default
     
     # Check optimistic state to determine action (simple dict read, no blocking)
     is_optimistically_recording = _optimistic_state.get('is_recording', False)
     
     if is_optimistically_recording:
-        # User wants to stop - update optimistic state and queue
+        # User wants to stop - queue operation first, then update optimistic state
+        queue_success = False
         try:
+            _recording_queue.put_nowait(("stop", None, None))
+            queue_success = True
+            logger.info("Stop queued successfully")
+        except queue_module.Full:
+            try:
+                _recording_queue.put(("stop", None, None), timeout=0.01)
+                queue_success = True
+                logger.info("Stop queued (with timeout)")
+            except:
+                logger.error("Failed to queue stop operation")
+        
+        # Bug 2 Fix: Only update optimistic state after successful queue operation
+        if queue_success:
             import time
             _optimistic_state['is_recording'] = False
             _optimistic_state['mode'] = None
             _optimistic_state['start_time'] = None
             _optimistic_state['pending_stop'] = True
-            _recording_queue.put_nowait(("stop", None, None))
-            logger.info("Stop queued")
-        except:
-            try:
-                _recording_queue.put(("stop", None, None), timeout=0.01)
-            except:
-                pass
+            _optimistic_state['pending_start'] = False
     else:
-        # User wants to start - update optimistic state and queue
+        # User wants to start - queue operation first, then update optimistic state
+        queue_success = False
         try:
+            _recording_queue.put_nowait(("start", device, "manual"))
+            queue_success = True
+            logger.info("Start queued successfully")
+        except queue_module.Full:
+            try:
+                _recording_queue.put(("start", device, "manual"), timeout=0.01)
+                queue_success = True
+                logger.info("Start queued (with timeout)")
+            except:
+                logger.error("Failed to queue start operation")
+        
+        # Bug 2 Fix: Only update optimistic state after successful queue operation
+        if queue_success:
             import time
             _optimistic_state['is_recording'] = True
             _optimistic_state['mode'] = "manual"
             _optimistic_state['start_time'] = time.time()
             _optimistic_state['pending_start'] = True
-            _recording_queue.put_nowait(("start", device, "manual"))
-            logger.info("Start queued")
-        except:
-            try:
-                _recording_queue.put(("start", device, "manual"), timeout=0.01)
-            except:
-                pass
+            _optimistic_state['pending_stop'] = False
     
     # Return immediately - no blocking operations
     return
