@@ -35,7 +35,7 @@ echo "Installing..."
 # Install system dependencies
 echo "Installing system dependencies..."
 sudo apt-get update
-sudo apt-get install -y build-essential libasound2-dev libjack-dev jackd2 python3-pip
+sudo apt-get install -y build-essential libasound2-dev libjack-dev libjack0 jackd python3-pip
 
 # Install Python dependencies
 echo "Installing Python dependencies..."
