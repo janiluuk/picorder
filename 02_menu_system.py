@@ -104,7 +104,7 @@ def update_display():
     
     # Get current device name
     device_name = audio_devices[current_device_index][1]
-    if len(device_name) > 20:
+    if len(device_name) > MAX_DEVICE_NAME_LENGTH:
         device_name = device_name[:17] + "..."
     
     # Get disk space
@@ -143,7 +143,7 @@ auto_record_enabled = config.get("auto_record", True)
 audio_device = config.get("audio_device", "plughw:0,0")
 
 device_name = audio_devices[current_device_index][1]
-if len(device_name) > 20:
+if len(device_name) > MAX_DEVICE_NAME_LENGTH:
     device_name = device_name[:17] + "..."
 
 names = ["Settings", "Device: " + device_name, "Auto: " + ("ON" if auto_record_enabled else "OFF"), get_disk_space(), "Back", "", ""]
