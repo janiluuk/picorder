@@ -180,13 +180,16 @@ class TestBackwardCompatibility(unittest.TestCase):
         self.test_manager.stop_silentjack()
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    @patch('subprocess.Popen')
+    @patch('recording_manager.MIN_FREE_DISK_SPACE_GB', 0.0001)  # Set very low threshold
+    @patch('shutil.disk_usage')
+    @patch('recording_manager.Popen')
     @patch('menu_settings.is_audio_device_valid')
-    def test_legacy_globals_updated_on_start(self, mock_validate, mock_popen):
+    def test_legacy_globals_updated_on_start(self, mock_validate, mock_popen, mock_disk):
         """Test that legacy globals are updated when starting recording"""
         mock_validate.return_value = True
         mock_process = MagicMock()
         mock_popen.return_value = mock_process
+        mock_disk.return_value = MagicMock(free=1024**3)  # 1GB free
         
         result = menu_settings.start_recording("plughw:0,0", mode="manual")
         
@@ -195,14 +198,17 @@ class TestBackwardCompatibility(unittest.TestCase):
         self.assertEqual(menu_settings.recording_mode, "manual")
         self.assertIsNotNone(menu_settings.recording_start_time)
 
-    @patch('subprocess.Popen')
+    @patch('recording_manager.MIN_FREE_DISK_SPACE_GB', 0.0001)  # Set very low threshold
+    @patch('shutil.disk_usage')
+    @patch('recording_manager.Popen')
     @patch('menu_settings.is_audio_device_valid')
-    def test_legacy_globals_updated_on_stop(self, mock_validate, mock_popen):
+    def test_legacy_globals_updated_on_stop(self, mock_validate, mock_popen, mock_disk):
         """Test that legacy globals are updated when stopping recording"""
         mock_validate.return_value = True
         mock_process = MagicMock()
         mock_process.poll.return_value = None  # Process is running
         mock_popen.return_value = mock_process
+        mock_disk.return_value = MagicMock(free=1024**3)  # 1GB free
         
         # Start recording
         menu_settings.start_recording("plughw:0,0", mode="manual")

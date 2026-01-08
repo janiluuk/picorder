@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
-from sys import argv as __argv__
 from menu_settings import *
 import threading
-
-# Import constants
-from menu_settings import AUTO_RECORD_POLL_INTERVAL, FILE_CHECK_INTERVAL
 
 ################################################################################
 # Recording menu - main interface
@@ -179,22 +175,13 @@ def update_display():
     """Update display with current recording status"""
     global screen, names, auto_record_enabled
     
-    # Reload config to get latest settings
-    config = load_config()
-    audio_device = config.get("audio_device", "")
-    auto_record_enabled = config.get("auto_record", False)
+    # Get current device configuration with validation
+    config, audio_device, auto_record_enabled, device_valid = get_current_device_config()
     
-    # Check if device is valid
-    device_valid = audio_device and is_audio_device_valid(audio_device)
     if not device_valid:
-        # Device invalid - disable auto-record and stop any active recordings
-        if auto_record_enabled:
-            config["auto_record"] = False
-            save_config(config)
-            auto_record_enabled = False
-            stop_silentjack()
+        # Device invalid - stop silentjack and any active recordings
+        stop_silentjack()
         # Stop any active recording if device becomes invalid
-        # Use RecordingManager for thread-safe state check
         import menu_settings as ms
         if ms._recording_manager.is_recording:
             logger.warning("Stopping recording due to invalid audio device")
@@ -243,8 +230,7 @@ def update_display():
     
     # Redraw screen
     screen.fill(black)
-    pygame.draw.rect(screen, tron_regular, (0,0,479,319),8)
-    pygame.draw.rect(screen, tron_light, (2,2,479-4,319-4),2)
+    draw_screen_border(screen)
     populate_screen(names, screen, b34=False, b56=False, show_audio_meter=show_meter, audio_level=audio_level)
 
 # Start auto-record monitor thread

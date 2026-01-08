@@ -1,4 +1,4 @@
-from subprocess import Popen, PIPE, call, getoutput, TimeoutExpired
+from subprocess import Popen, PIPE, TimeoutExpired
 from pygame.locals import KEYDOWN, K_ESCAPE
 import pygame
 import time
@@ -121,6 +121,17 @@ AUTO_RECORD_POLL_INTERVAL = 0.5  # seconds
 DEVICE_VALIDATION_CACHE_TTL = 5.0  # seconds - cache device validation results
 FILE_CHECK_INTERVAL = 1.0  # seconds - check files less frequently when idle
 
+# Disk space and audio constants
+MIN_FREE_DISK_SPACE_GB = 0.1  # Minimum free disk space required for recording (100MB)
+AUDIO_SAMPLE_MAX = 32768  # 16-bit audio maximum value
+SILENCE_THRESHOLD = 0.005  # Audio silence detection threshold
+AUDIO_LEVEL_BOOST = 1.2  # Audio level display boost factor
+AUDIO_METER_LOW_THRESHOLD = 0.5  # Audio meter color threshold for green
+AUDIO_METER_HIGH_THRESHOLD = 0.8  # Audio meter color threshold for red
+
+# Device name display length
+MAX_DEVICE_NAME_LENGTH = 20
+
 # Device validation cache
 _device_validation_cache = {}
 _device_cache_lock = threading.Lock()
@@ -204,6 +215,21 @@ def get_disk_space():
     except Exception as e:
         logger.error(f"Unexpected error getting disk space: {e}", exc_info=True)
         return "Free: N/A"
+
+def get_current_device_config():
+    """Get current audio device and auto-record configuration with validation"""
+    config = load_config()
+    audio_device = config.get("audio_device", "")
+    auto_record = config.get("auto_record", False)
+    
+    # Validate device - if invalid, disable auto-record
+    device_valid = audio_device and is_audio_device_valid(audio_device)
+    if not device_valid and auto_record:
+        config["auto_record"] = False
+        save_config(config)
+        auto_record = False
+    
+    return config, audio_device, auto_record, device_valid
 
 def load_config():
     """Load configuration from file"""
@@ -324,7 +350,7 @@ def detect_audio_signal(device, threshold=0.01, sample_duration=0.1):
         values = [int(x) for x in output.split() if x.isdigit() or (x.startswith('-') and x[1:].isdigit())]
         if values:
             max_val = max([abs(v) for v in values])
-            return max_val > threshold * 32768  # 16-bit audio threshold
+            return max_val > threshold * AUDIO_SAMPLE_MAX
         return False
     except (ValueError, OSError) as e:
         logger.debug(f"Error detecting audio signal: {e}")
@@ -358,13 +384,13 @@ def get_audio_level(device, sample_duration=0.05):
             return 0.0
         
         rms = (sum(x * x for x in samples) / len(samples)) ** 0.5
-        # Normalize to 0.0-1.0 (16-bit audio max is 32768)
-        level = min(1.0, rms / 32768.0)
+        # Normalize to 0.0-1.0
+        level = min(1.0, rms / AUDIO_SAMPLE_MAX)
         
         # Apply some smoothing and scaling for better visual feedback
         # Use logarithmic scaling for more natural meter response
         if level > 0:
-            level = (level ** 0.5) * 1.2  # Square root scaling with slight boost
+            level = (level ** 0.5) * AUDIO_LEVEL_BOOST
             level = min(1.0, level)
         
         return level
@@ -389,7 +415,7 @@ def start_recording(device, mode="manual"):
     try:
         stat = shutil.disk_usage("/")
         free_gb = stat.free / (1024**3)
-        if free_gb < 0.1:  # Less than 100MB free
+        if free_gb < MIN_FREE_DISK_SPACE_GB:
             logger.error("Insufficient disk space for recording")
             return False
     except OSError as e:
@@ -473,7 +499,7 @@ def check_silence(device, duration=20):
     """Check if there's been silence for specified duration (for manual recording)"""
     # This is a simplified check - in practice you'd want to monitor audio levels
     # For now, we'll use a basic detection
-    return not detect_audio_signal(device, threshold=0.005)
+    return not detect_audio_signal(device, threshold=SILENCE_THRESHOLD)
 
 def update_activity():
     """Update last activity time (for screen timeout)"""
@@ -548,7 +574,8 @@ def check_service(srvc):
         return False
 
     if srvc == "vnc":
-        if 'vnc :1' in getoutput('/bin/ps -ef'):
+        ps_output = run_cmd(['/bin/ps', '-ef'])
+        if 'vnc :1' in ps_output:
             return True
         else:
             return False
@@ -632,8 +659,19 @@ button_pos_6 = (260, 255, 55, 210)
 
 size = width, height = 480, 320
 
+# Screen drawing constants
+SCREEN_BORDER_OUTER = (0, 0, 479, 319)
+SCREEN_BORDER_INNER = (2, 2, 479-4, 319-4)
+SCREEN_BORDER_OUTER_WIDTH = 8
+SCREEN_BORDER_INNER_WIDTH = 2
+
 ################################################################################
 # Functions
+def draw_screen_border(screen):
+    """Draw standard screen border"""
+    pygame.draw.rect(screen, tron_regular, SCREEN_BORDER_OUTER, SCREEN_BORDER_OUTER_WIDTH)
+    pygame.draw.rect(screen, tron_light, SCREEN_BORDER_INNER, SCREEN_BORDER_INNER_WIDTH)
+
 # define function for printing text in a specific place with a specific width
 # and height with a specific colour and border
 def make_button(text, pos, colour, screen):
@@ -755,11 +793,6 @@ def run_cmd(cmd):
         logger.error(f"Unexpected error running command {cmd}: {e}", exc_info=True)
         return ""
 
-def run_proc(proc, f, a):
-    pygame.quit()
-    process = call(proc, shell=True)
-    os.execv(f, a)
-
 # Define each button press action
 def button(number, _1, _2, _3, _4, _5, _6):
     if number == 1:
@@ -815,9 +848,8 @@ def init(draw=True):
             screen = pygame.display.set_mode(size)
             # Background Color
             screen.fill(black)
-            # Outer Border
-            pygame.draw.rect(screen, tron_regular, (0,0,479,319),8)
-            pygame.draw.rect(screen, tron_light, (2,2,479-4,319-4),2)
+            # Draw border
+            draw_screen_border(screen)
 
             return screen
     except pygame.error as e:
@@ -837,9 +869,9 @@ def draw_audio_meter(screen, level, x=400, y=30, width=20, height=60):
     if filled_height > 0:
         # Draw filled portion with color gradient
         # Green for low levels, yellow for mid, red for high
-        if level < 0.5:
+        if level < AUDIO_METER_LOW_THRESHOLD:
             color = green
-        elif level < 0.8:
+        elif level < AUDIO_METER_HIGH_THRESHOLD:
             color = tron_yel
         else:
             color = red
