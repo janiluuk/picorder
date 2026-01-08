@@ -184,10 +184,15 @@ def update_display():
     button_width = 60
     button_height = 40
     
-    # Draw up button (button 1) with filled background
+    # Dark orange background color (low contrast, dark)
+    dark_orange = (120, 60, 20)  # Dark orange with low brightness
+    dark_orange_border = (160, 80, 30)  # Slightly lighter for border
+    arrow_color = (200, 150, 100)  # Light orange/beige for arrows (good contrast on dark orange)
+    
+    # Draw up button (button 1) with dark orange background
     up_rect = pygame.Rect(up_button_x, up_button_y, button_width, button_height)
-    pygame.draw.rect(screen, tron_regular, up_rect)
-    pygame.draw.rect(screen, tron_light, up_rect, 3)
+    pygame.draw.rect(screen, dark_orange, up_rect)
+    pygame.draw.rect(screen, dark_orange_border, up_rect, 2)
     # Draw up arrow as a triangle shape
     center_x = up_button_x + button_width // 2
     center_y = up_button_y + button_height // 2
@@ -197,13 +202,13 @@ def update_display():
         (center_x - 15, center_y + 8),  # Bottom left
         (center_x + 15, center_y + 8)   # Bottom right
     ]
-    pygame.draw.polygon(screen, tron_light, up_points)
-    pygame.draw.polygon(screen, tron_inverse, up_points, 2)
+    pygame.draw.polygon(screen, arrow_color, up_points)
+    pygame.draw.polygon(screen, dark_orange_border, up_points, 1)
     
-    # Draw down button (button 2) with filled background
+    # Draw down button (button 2) with dark orange background
     down_rect = pygame.Rect(down_button_x, down_button_y, button_width, button_height)
-    pygame.draw.rect(screen, tron_regular, down_rect)
-    pygame.draw.rect(screen, tron_light, down_rect, 3)
+    pygame.draw.rect(screen, dark_orange, down_rect)
+    pygame.draw.rect(screen, dark_orange_border, down_rect, 2)
     # Draw down arrow as a triangle shape
     center_x = down_button_x + button_width // 2
     center_y = down_button_y + button_height // 2
@@ -213,8 +218,8 @@ def update_display():
         (center_x - 15, center_y - 8),  # Top left
         (center_x + 15, center_y - 8)   # Top right
     ]
-    pygame.draw.polygon(screen, tron_light, down_points)
-    pygame.draw.polygon(screen, tron_inverse, down_points, 2)
+    pygame.draw.polygon(screen, arrow_color, down_points)
+    pygame.draw.polygon(screen, dark_orange_border, down_points, 1)
 
 # Initialize
 refresh_recordings()

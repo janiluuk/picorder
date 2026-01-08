@@ -104,7 +104,7 @@ recording_process = None  # Deprecated
 silentjack_process = None  # Deprecated
 recording_start_time = None  # Deprecated
 recording_filename = None  # Deprecated
-1wrecording_mode = None
+recording_mode = None
 
 # Recording queue and worker thread - shared across all pages
 # These must be in menu_settings.py so they persist when pages are loaded via exec()
@@ -115,6 +115,9 @@ _recording_thread = None  # Will be initialized on first use
 _recording_operation_in_progress = None  # Will be initialized on first use
 _recording_state_machine = None  # Will be initialized on first use  # Deprecated
 is_recording = False  # Deprecated
+
+# Current page tracking for on_touch() to know which menu is active
+_current_page = None  # Will be set by go_to_page()
 
 # Lock for legacy compatibility
 _recording_lock = _recording_manager._lock
@@ -216,9 +219,41 @@ def go_to_page(p):
             # These are in 01_menu_run.py's namespace, so we need to import them
         ]
         
+        # Get items from menu_settings globals
         for item in shared_items:
             if item in globals():
                 page_globals[item] = globals()[item]
+        
+        # Special handling for 'screen': it's defined in the calling page, not in menu_settings
+        # Use inspect to get it from the caller's frame (could be module-level or function-level)
+        if 'screen' not in page_globals:
+            try:
+                import inspect
+                # Get the caller's frame (go_to_page is called from a page, so caller is the page)
+                caller_frame = inspect.currentframe().f_back
+                if caller_frame:
+                    # First try caller's globals (if called from module level)
+                    if 'screen' in caller_frame.f_globals:
+                        page_globals['screen'] = caller_frame.f_globals['screen']
+                        logger.debug("Retrieved 'screen' from caller's globals")
+                    # Then try caller's locals (if called from a function)
+                    elif 'screen' in caller_frame.f_locals:
+                        page_globals['screen'] = caller_frame.f_locals['screen']
+                        logger.debug("Retrieved 'screen' from caller's locals")
+                    # Finally, try the caller's module globals (walk up the frame chain)
+                    else:
+                        # Walk up frames to find module-level screen
+                        frame = caller_frame
+                        while frame:
+                            if 'screen' in frame.f_globals:
+                                page_globals['screen'] = frame.f_globals['screen']
+                                logger.debug("Retrieved 'screen' from frame chain")
+                                break
+                            frame = frame.f_back
+            except Exception as e:
+                logger.warning(f"Could not retrieve 'screen' from caller frame: {e}")
+                # If screen is not available, the page will need to call init() itself
+                # This is a fallback - pages should have screen already
         
         # Import pygame and other common modules
         page_globals['pygame'] = __import__('pygame')
@@ -226,6 +261,17 @@ def go_to_page(p):
         page_globals['sys'] = sys
         page_globals['time'] = __import__('time')
         page_globals['Path'] = __import__('pathlib').Path
+        
+        # Set current page for on_touch() to know which menu is active
+        global _current_page
+        if p == PAGE_05:
+            _current_page = "library"
+        elif p == PAGE_01:
+            _current_page = "main"
+        elif p == PAGE_02:
+            _current_page = "settings"
+        else:
+            _current_page = "other"
         
         # Execute in the isolated namespace
         # Pages can use 'from menu_settings import *' to get additional functions if needed
@@ -809,16 +855,19 @@ def on_touch():
         return None
     
     # button 1 event x_min, x_max, y_min, y_max
-    # Check for up button in library (right side, moved up and bigger)
-    if 410 <= touch_pos[0] <= 470 and 30 <= touch_pos[1] <= 70:
-        return 1
-    # Check for down button in library (right side, moved up and bigger)
-    if 410 <= touch_pos[0] <= 470 and 75 <= touch_pos[1] <= 115:
-        return 2
-    # Original button 1 (left side, full size) - check if not in library small button area
+    # Only check library-specific buttons if we're in the library menu
+    if _current_page == "library":
+        # Check for up button in library (right side, moved up and bigger)
+        if 410 <= touch_pos[0] <= 470 and 30 <= touch_pos[1] <= 70:
+            return 1
+        # Check for down button in library (right side, moved up and bigger)
+        if 410 <= touch_pos[0] <= 470 and 75 <= touch_pos[1] <= 115:
+            return 2
+    
+    # Original button 1 (left side, full size)
     if 30 <= touch_pos[0] <= 240 and 105 <= touch_pos[1] <=160:
         return 1
-    # Original button 2 (right side, full size) - check if not in library small button area
+    # Original button 2 (right side, full size)
     if 260 <= touch_pos[0] <= 470 and 105 <= touch_pos[1] <=160:
         return 2
     # button 3 event
@@ -1132,7 +1181,7 @@ def main(buttons=[], update_callback=None):
             if not hasattr(main, '_callback_counter'):
                 main._callback_counter = 0
             main._callback_counter += 1
-            if main._callback_counter >= 10:  # Call every 10 iterations (~1 second) for responsive updates
+            if main._callback_counter >= 5:  # Call every 5 iterations (~0.5 second) for more responsive updates
                 main._callback_counter = 0
                 try:
                     # Process events before callback to keep UI responsive
