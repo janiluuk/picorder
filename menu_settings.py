@@ -1,4 +1,4 @@
-from subprocess import Popen, PIPE, call, getoutput
+from subprocess import Popen, PIPE, call, getoutput, TimeoutExpired
 from pygame.locals import KEYDOWN, K_ESCAPE
 import pygame
 import time
@@ -267,7 +267,7 @@ def validate_audio_device(device, use_cache=True):
                 _device_validation_cache[device] = (is_valid, time.time())
         
         return is_valid
-    except TimeoutError:
+    except TimeoutExpired:
         logger.warning(f"Timeout validating device {device}")
         return False
     except (OSError, ValueError) as e:
