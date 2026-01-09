@@ -77,7 +77,7 @@ To run the menu on a Linux desktop system:
 - **Screen Management**: Screen turns off after 30 seconds of inactivity, stays on during recording
 - **Smart File Naming**: Recordings are automatically named with date, time, and duration (e.g., `recording_20240115_143022_05m32s.wav`)
 
-![screenshot2](https://github.com/janiluuk/picorder/blob/main/screenshot2.png)
+![screenshot](https://github.com/janiluuk/picorder/blob/main/screenshot3.png)
 
 ## Usage ##
 
@@ -106,6 +106,8 @@ The main menu is displayed when you start the application. The screen shows:
 - Press Button 2 to start recording manually
 - Press Button 2 again (or Button 3) to stop recording
 - Manual recordings are saved with duration in the filename
+
+![screenshot2](https://github.com/janiluuk/picorder/blob/main/screenshot2.png)
 
 ### Settings Menu
 
