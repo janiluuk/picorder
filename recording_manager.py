@@ -477,31 +477,33 @@ class RecordingManager:
                     logger.error(f"Error killing recording process: {e}", exc_info=True)
             except Exception as e:
                 logger.error(f"Error terminating recording process: {e}", exc_info=True)
-        else:
-            logger.warning("No recording process to stop (recording_process is None)")
-            
-            # Rename file with duration (outside lock)
-            if recording_filename and recording_filename.exists():
-                if recording_start_time:
-                    duration = int(time.time() - recording_start_time)
-                    new_filename = self._rename_with_duration(recording_filename, duration)
-                    if new_filename:
-                        try:
-                            recording_filename.rename(new_filename)
-                            logger.info(f"Renamed recording file to: {new_filename}")
-                        except OSError as e:
-                            logger.error(f"OS error renaming file {recording_filename}: {e}")
-                        except Exception as e:
-                            logger.error(f"Unexpected error renaming file: {e}", exc_info=True)
             
             # Close file handles (outside lock)
+            # CRITICAL FIX: File handle closing must be inside the if block where recording_process is not None
             try:
                 if recording_process.stdout:
                     recording_process.stdout.close()
                 if recording_process.stderr:
                     recording_process.stderr.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Error closing file handles: {e}")
+        else:
+            logger.warning("No recording process to stop (recording_process is None)")
+        
+        # Rename file with duration (outside lock)
+        # This can happen in both cases (process exists or not) if we have a filename
+        if recording_filename and recording_filename.exists():
+            if recording_start_time:
+                duration = int(time.time() - recording_start_time)
+                new_filename = self._rename_with_duration(recording_filename, duration)
+                if new_filename:
+                    try:
+                        recording_filename.rename(new_filename)
+                        logger.info(f"Renamed recording file to: {new_filename}")
+                    except OSError as e:
+                        logger.error(f"OS error renaming file {recording_filename}: {e}")
+                    except Exception as e:
+                        logger.error(f"Unexpected error renaming file: {e}", exc_info=True)
         
         # Give device a brief moment to be fully released after stopping
         # This helps prevent "device busy" errors when starting a new recording immediately

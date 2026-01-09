@@ -37,6 +37,10 @@ scroll_offset = 0
 recordings = []
 selected_index = 0
 
+# Playback state
+playback_process = None
+is_playing = False
+
 def refresh_recordings():
     """Refresh the recordings list"""
     global recordings

@@ -738,7 +738,7 @@ tron_inverse = tron_whi
 ################################################################################
 
 label_pos_1 = (32, 30, 48)
-label_pos_2 = (32, 105, 48)
+label_pos_2 = (32, 105, 36)  # Smaller font for library items to fit on screen
 label_pos_3 = (32, 180, 48)
 button_pos_1 = (30, 105, 55, 210)
 button_pos_2 = (260, 105, 55, 210)

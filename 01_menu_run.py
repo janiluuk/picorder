@@ -124,28 +124,10 @@ if ms._recording_queue is None:
 # This prevents crashes if queue persists but event doesn't (e.g., after page reload)
 if not hasattr(ms, '_recording_operation_in_progress') or ms._recording_operation_in_progress is None:
     ms._recording_operation_in_progress = threading.Event()
-# Always initialize state machine if it doesn't exist
-if ms._recording_state_machine is None:
-    from recording_state import RecordingStateMachine
-    ms._recording_state_machine = RecordingStateMachine(ms._recording_manager)
-# Optimistic UI state - updated immediately, synced with actual state later
-# Thread-safe access using a lock
-if not hasattr(ms, '_optimistic_recording_state'):
-    ms._optimistic_recording_state = {
-        'is_recording': False,
-        'mode': None,
-        'start_time': None,
-        'pending_start': False,
-        'pending_stop': False
-    }
-# Lock for optimistic state updates (prevents race conditions)
-if not hasattr(ms, '_optimistic_state_lock'):
-    ms._optimistic_state_lock = threading.Lock()
+# Simplified: Just use RecordingManager as source of truth
+# No optimistic state, no state machine - just queue operations and let worker handle them
 _recording_queue = ms._recording_queue
 _recording_operation_in_progress = ms._recording_operation_in_progress
-_recording_state_machine = ms._recording_state_machine
-_optimistic_state = ms._optimistic_recording_state
-_optimistic_state_lock = ms._optimistic_state_lock
 
 def _recording_worker():
     """Background worker thread for recording operations - REFACTORED for reliability"""
@@ -195,43 +177,21 @@ def _recording_worker():
             else:
                 logger.warning("Worker: _recording_operation_in_progress is None, skipping set()")
             
-            # Process operation with timeout protection
+            # Process operation - SIMPLIFIED: Just execute and log result
             try:
                 if op_type == "start":
                     try:
-                        logger.info("Worker: Processing start recording operation from queue")
+                        logger.info("Worker: Processing START operation from queue")
                         result = start_recording(device, mode=mode)
-                        # Update optimistic state based on result (thread-safe)
-                        with ms._optimistic_state_lock:
-                            if result:
-                                # Success - optimistic state was correct, just clear pending flag
-                                ms._optimistic_recording_state['pending_start'] = False
-                                ms._optimistic_recording_state['pending_stop'] = False  # Clear any pending stop
-                                if ms._recording_state_machine is not None:
-                                    ms._recording_state_machine.on_start_success()
-                                logger.info("Worker: Recording started successfully")
-                                # Trigger display update by ensuring optimistic state matches actual
-                                # The display callback will pick this up on next cycle
-                            else:
-                                # Failed - revert optimistic state
-                                ms._optimistic_recording_state['is_recording'] = False
-                                ms._optimistic_recording_state['mode'] = None
-                                ms._optimistic_recording_state['start_time'] = None
-                                ms._optimistic_recording_state['pending_start'] = False
-                                ms._optimistic_recording_state['pending_stop'] = False
-                                if ms._recording_state_machine is not None:
-                                    ms._recording_state_machine.on_start_failure("start_recording() returned False")
-                                logger.warning("Worker: Recording start failed")
+                        if result:
+                            logger.info("Worker: Recording started successfully")
+                        else:
+                            logger.warning("Worker: Recording start failed")
                     except Exception as e:
-                        error_msg = str(e)
-                        if ms._recording_state_machine is not None:
-                            ms._recording_state_machine.on_start_failure(error_msg)
-                        logger.warning(f"Failed to start recording in background: {e}", exc_info=True)
+                        logger.error(f"Worker: Failed to start recording: {e}", exc_info=True)
                 elif op_type == "stop":
-                    # SIMPLIFIED ROBUST STOP: Kill processes first, then clean up state
-                    logger.info("=" * 60)
-                    logger.info("Worker: STOP OPERATION - Processing")
-                    logger.info("=" * 60)
+                    # SIMPLIFIED STOP: Kill processes first, then call stop_recording()
+                    logger.info("Worker: Processing STOP operation from queue")
                     
                     # Get device from config
                     audio_device = None
@@ -241,7 +201,7 @@ def _recording_worker():
                     except Exception as e:
                         logger.warning(f"Worker: Could not load config: {e}")
                     
-                    # Step 1: Kill arecord processes FIRST (most reliable, non-blocking)
+                    # Kill arecord processes FIRST (most reliable)
                     if audio_device:
                         try:
                             logger.info(f"Worker: Killing arecord processes for {audio_device}")
@@ -249,49 +209,30 @@ def _recording_worker():
                         except Exception as e:
                             logger.error(f"Worker: Error killing processes: {e}", exc_info=True)
                     
-                    # Step 2: Call stop_recording() to clean up state
+                    # Call stop_recording() to clean up state
                     try:
                         result = stop_recording()
                         logger.info(f"Worker: stop_recording() returned: {result}")
                     except Exception as e:
                         logger.error(f"Worker: stop_recording() exception: {e}", exc_info=True)
                     
-                    # Step 3: Clear ALL state (ensure it's cleared even if stop_recording failed)
+                    # Ensure state is cleared (stop_recording() should do this, but be safe)
                     try:
                         with ms._recording_manager._lock:
-                            ms._recording_manager._is_recording = False
-                            ms._recording_manager._recording_process = None
-                            ms._recording_manager._recording_filename = None
-                            ms._recording_manager._recording_start_time = None
-                            ms._recording_manager._recording_mode = None
-                            ms._recording_manager._cached_is_recording = False
-                            ms._recording_manager._cached_mode = None
-                            ms._recording_manager._cached_start_time = None
-                        logger.info("Worker: Cleared all recording state")
+                            if ms._recording_manager._is_recording:
+                                logger.warning("Worker: State still marked as recording after stop, clearing...")
+                                ms._recording_manager._is_recording = False
+                                ms._recording_manager._recording_process = None
+                                ms._recording_manager._recording_filename = None
+                                ms._recording_manager._recording_start_time = None
+                                ms._recording_manager._recording_mode = None
+                                ms._recording_manager._cached_is_recording = False
+                                ms._recording_manager._cached_mode = None
+                                ms._recording_manager._cached_start_time = None
                     except Exception as e:
                         logger.error(f"Worker: Error clearing state: {e}", exc_info=True)
                     
-                    # Step 4: Update optimistic state (ensure it's fully cleared)
-                    try:
-                        with ms._optimistic_state_lock:
-                            ms._optimistic_recording_state['is_recording'] = False
-                            ms._optimistic_recording_state['mode'] = None
-                            ms._optimistic_recording_state['start_time'] = None
-                            ms._optimistic_recording_state['pending_stop'] = False
-                            ms._optimistic_recording_state['pending_start'] = False
-                        logger.info("Worker: Updated optimistic state to fully cleared (not recording)")
-                    except Exception as e:
-                        logger.warning(f"Worker: Could not update optimistic state: {e}")
-                    
-                    # Step 5: Update state machine (non-critical)
-                    if _recording_state_machine is not None:
-                        try:
-                            _recording_state_machine.on_stop_success()
-                        except:
-                            pass  # Ignore state machine errors
-                    
                     logger.info("Worker: Stop operation COMPLETE")
-                    logger.info("=" * 60)
             except Exception as e:
                 logger.error(f"Worker: Exception processing {op_type} operation: {e}", exc_info=True)
                 consecutive_errors += 1
@@ -337,184 +278,73 @@ else:
 _recording_thread = ms._recording_thread
 
 def _2():
-    # Manual record/stop (toggle) - ultra-minimal, completely non-blocking
-    # Only queue operation - all state updates happen in worker/display callback
+    # Manual record/stop (toggle) - COMPLETELY NON-BLOCKING
+    # Simplified: Just queue the operation based on current button state
+    # No complex state checking, no locks, no blocking calls
     global audio_device, _recording_thread
     
-    # Bug 1 Fix: Reload audio_device from config to get latest value
-    # This ensures we use the current device even after settings changes
-    try:
-        config = load_config()
-        audio_device = config.get("audio_device", "")
-    except Exception as e:
-        logger.warning(f"Could not reload config in _2(): {e}")
-        # Fall back to existing global value if config load fails
-    
-    # Check if device is configured
-    if not audio_device:
-        # No device configured - can't record
-        logger.warning("No audio device configured, cannot start recording")
-        return
-    
-    device = audio_device  # Use current device from config
-    
-    # Debounce: Prevent rapid double-clicks from queuing duplicate operations
+    # Debounce: Prevent rapid double-clicks
     import time
     if not hasattr(_2, '_last_call_time'):
         _2._last_call_time = 0
     current_time = time.time()
     time_since_last_call = current_time - _2._last_call_time
-    if time_since_last_call < 0.3:  # 300ms debounce
+    if time_since_last_call < 0.2:  # 200ms debounce
         logger.debug(f"_2(): Ignoring rapid click (debounce: {time_since_last_call:.3f}s)")
         return
     _2._last_call_time = current_time
     
-    # Check BOTH optimistic state AND actual state to determine action
-    # This prevents double-queuing when optimistic state changes between rapid calls
-    with _optimistic_state_lock:
-        is_optimistically_recording = _optimistic_state.get('is_recording', False)
-        pending_start = _optimistic_state.get('pending_start', False)
-        pending_stop = _optimistic_state.get('pending_stop', False)
-    
-    # Also check actual recording state (non-blocking) to make decision
+    # Get device from config (quick, non-blocking)
     try:
-        import menu_settings as ms
+        config = load_config()
+        device = config.get("audio_device", "")
+    except Exception as e:
+        logger.warning(f"_2(): Could not load config: {e}")
+        return
+    
+    if not device:
+        logger.warning("_2(): No audio device configured")
+        return
+    
+    # SIMPLIFIED: Check current button state from display (non-blocking)
+    # The button text tells us what to do - no need for complex state checking
+    try:
+        # Get current recording state WITHOUT blocking
         actual_state = ms._recording_manager.get_recording_state(blocking=False)
-        is_actually_recording = actual_state['is_recording'] if actual_state else False
-    except:
-        is_actually_recording = False
+        is_recording = actual_state['is_recording'] if actual_state else False
+    except Exception as e:
+        logger.warning(f"_2(): Could not get recording state: {e}")
+        is_recording = False
     
-    # Decision: If EITHER optimistic OR actual says recording, we should stop
-    # Only start if BOTH say not recording AND no pending operations
-    # BUT: If pending_stop is True but we're not actually recording, clear it (stale state)
-    # If pending_start is True, we're already starting, so don't try to start again
-    
-    # Check if pending_stop is stale (we're not recording but pending_stop is True)
-    if pending_stop and not is_optimistically_recording and not is_actually_recording:
-        logger.warning("_2(): Found stale pending_stop flag - clearing it")
-        with _optimistic_state_lock:
-            _optimistic_state['pending_stop'] = False
-        pending_stop = False
-    
-    # CRITICAL FIX: If actual_recording=True but pending_stop=True, the stop didn't work
-    # Clear pending_stop and allow stopping again to prevent stuck state
-    if is_actually_recording and pending_stop:
-        logger.warning("_2(): Recording still running despite pending_stop - clearing flag to allow retry")
-        with _optimistic_state_lock:
-            _optimistic_state['pending_stop'] = False
-        pending_stop = False
-    
-    # Decision: stop if recording (either optimistic or actual), start if not recording
-    # Don't block stop if we're actually recording (even if pending_stop was set)
-    should_stop = is_optimistically_recording or is_actually_recording
-    should_start = (not is_optimistically_recording and not is_actually_recording) and not pending_start and not pending_stop
-    
-    # Log state for debugging
-    logger.info(f"_2(): State check - optimistic_recording={is_optimistically_recording}, actual_recording={is_actually_recording}, pending_start={pending_start}, pending_stop={pending_stop}")
-    logger.info(f"_2(): Decision - should_stop={should_stop}, should_start={should_start}")
-    
-    if should_stop:
-        # User wants to stop - queue operation first, then update optimistic state
-        logger.info("=" * 60)
-        logger.info("_2(): User pressed STOP button - queuing stop operation")
-        logger.info(f"_2(): Worker thread alive: {_recording_thread.is_alive() if _recording_thread else 'None'}")
-        logger.info(f"_2(): Queue size before: {_recording_queue.qsize()}")
-        
-        queue_success = False
-        try:
-            # Bug 2 Fix: Unbounded queue never raises Full, so catch any exception
+    # SIMPLE DECISION: If recording, queue stop. If not, queue start.
+    # No optimistic state, no pending flags, no complex logic
+    try:
+        if is_recording:
+            # Currently recording - queue stop
+            logger.info("_2(): Queuing STOP operation")
             _recording_queue.put_nowait(("stop", None, None))
-            queue_success = True
-            logger.info(f"_2(): Stop queued successfully. Queue size after: {_recording_queue.qsize()}")
-        except (queue_module.Full, AttributeError, TypeError) as e:
-            # Queue might be None, corrupted, or (theoretically) full
-            logger.warning(f"_2(): put_nowait() failed: {e}, trying timeout fallback")
-            try:
-                _recording_queue.put(("stop", None, None), timeout=0.01)
-                queue_success = True
-                logger.info(f"_2(): Stop queued (with timeout fallback). Queue size: {_recording_queue.qsize()}")
-            except Exception as e2:
-                logger.error(f"_2(): Failed to queue stop operation: {e2}")
-        except Exception as e:
-            # Catch any other unexpected exception
-            logger.error(f"_2(): Unexpected error queuing stop: {e}", exc_info=True)
-        
-        logger.info("=" * 60)
-        
-        # Bug 2 Fix: Only update optimistic state after successful queue operation
-        # Thread-safe update to prevent race conditions
-        if queue_success:
-            import time
-            with _optimistic_state_lock:
-                _optimistic_state['is_recording'] = False
-                _optimistic_state['mode'] = None
-                _optimistic_state['start_time'] = None
-                _optimistic_state['pending_stop'] = True
-                _optimistic_state['pending_start'] = False
-            
-            # Immediately update display to show stop state
-            # This provides instant visual feedback
-            try:
-                # Import pygame if not already available
-                try:
-                    import pygame
-                except ImportError:
-                    from menu_settings import pygame
-                update_display()
-                pygame.display.update()
-            except Exception as e:
-                logger.debug(f"Error updating display immediately after stop: {e}")
-    elif should_start:
-        # User wants to start - queue operation first, then update optimistic state
-        logger.info(f"_2(): User pressed START button - queuing start operation for device: {device}")
-        logger.info(f"_2(): Worker thread alive: {_recording_thread.is_alive() if _recording_thread else 'None'}")
-        logger.info(f"_2(): Queue size before: {_recording_queue.qsize()}")
-        logger.info(f"_2(): State check - optimistic: {is_optimistically_recording}, actual: {is_actually_recording}, pending_start: {pending_start}, pending_stop: {pending_stop}")
-        
-        queue_success = False
-        try:
-            # Bug 2 Fix: Unbounded queue never raises Full, so catch any exception
+            logger.info(f"_2(): Stop queued. Queue size: {_recording_queue.qsize()}")
+        else:
+            # Not recording - queue start
+            logger.info(f"_2(): Queuing START operation for device: {device}")
             _recording_queue.put_nowait(("start", device, "manual"))
-            queue_success = True
-            logger.info(f"_2(): Start queued successfully. Queue size after: {_recording_queue.qsize()}")
-        except (queue_module.Full, AttributeError, TypeError) as e:
-            # Queue might be None, corrupted, or (theoretically) full
-            try:
+            logger.info(f"_2(): Start queued. Queue size: {_recording_queue.qsize()}")
+    except (queue_module.Full, AttributeError, TypeError) as e:
+        # Fallback with timeout if put_nowait fails
+        logger.warning(f"_2(): put_nowait failed: {e}, trying timeout fallback")
+        try:
+            if is_recording:
+                _recording_queue.put(("stop", None, None), timeout=0.01)
+            else:
                 _recording_queue.put(("start", device, "manual"), timeout=0.01)
-                queue_success = True
-                logger.info("Start queued (with timeout fallback)")
-            except Exception as e2:
-                logger.error(f"Failed to queue start operation: {e2}")
-        except Exception as e:
-            # Catch any other unexpected exception
-            logger.error(f"Unexpected error queuing start: {e}", exc_info=True)
-        
-        # Bug 2 Fix: Only update optimistic state after successful queue operation
-        # Thread-safe update to prevent race conditions
-        if queue_success:
-            import time
-            with _optimistic_state_lock:
-                _optimistic_state['is_recording'] = True
-                _optimistic_state['mode'] = "manual"
-                _optimistic_state['start_time'] = time.time()
-                _optimistic_state['pending_start'] = True
-                _optimistic_state['pending_stop'] = False
-            
-            # Immediately update display to show recording state
-            # This provides instant visual feedback
-            try:
-                # Import pygame if not already available
-                try:
-                    import pygame
-                except ImportError:
-                    from menu_settings import pygame
-                update_display()
-                pygame.display.update()
-            except Exception as e:
-                logger.debug(f"Error updating display immediately after start: {e}")
-    else:
-        # Neither stop nor start - probably a rapid double-click that was debounced
-        logger.debug(f"_2(): No action taken - should_stop={should_stop}, should_start={should_start}, pending_start={pending_start}, pending_stop={pending_stop}")
+            logger.info("_2(): Operation queued with timeout fallback")
+        except Exception as e2:
+            logger.error(f"_2(): Failed to queue operation: {e2}")
+    except Exception as e:
+        logger.error(f"_2(): Unexpected error queuing operation: {e}", exc_info=True)
+    
+    # NO display update here - let the callback handle it to avoid blocking
+    # The display will update automatically on the next callback cycle
     
     # Return immediately - no blocking operations
     return
@@ -655,114 +485,23 @@ def update_display():
     # Don't stop recordings here - it blocks! Just update the display
     # Recording management should happen in response to user actions, not in display updates
     
-    # Update recording status - use thread-safe property getters
-    # The property getters use locks, but they should be fast (just reading booleans)
-    # If they block, it means start_recording is holding the lock, which should be brief
-    status = "Ready"
-    duration = 0
-    audio_indicator = ""
-    is_currently_recording = False
-    current_mode = None
-    recording_start_time = None
+    # SIMPLIFIED: Get recording state - just use actual state, no optimistic state
+    # This eliminates lock contention and complexity - just get state and display it
+    display_is_recording = False
+    display_mode = None
+    display_start_time = None
     
     try:
         import menu_settings as ms
-        # Use get_recording_state() with non-blocking mode to avoid UI freeze
-        # This now returns cached state if lock is held, so we always get a result
+        # Get actual recording state (non-blocking)
         state = ms._recording_manager.get_recording_state(blocking=False)
-        # State is never None now - it returns cached state if lock is held
-        is_currently_recording = state['is_recording']
-        current_mode = state['mode']
-        recording_start_time = state['start_time']
-        
-        # Fallback: If state says not recording, check for arecord processes
-        # This handles cases where state is stale but recording is actually active
-        # BUT: Only check if cached state also says not recording (to avoid overriding cleared state)
-        if not is_currently_recording and device_valid:
-            # Check if cached state was intentionally cleared (both False means cleared, not stale)
-            try:
-                cached_is_recording = ms._recording_manager._cached_is_recording
-                # If both actual and cached state say False, trust it (state was intentionally cleared)
-                # Only check arecord if cached state is True but actual is False (stale state)
-                if cached_is_recording and not is_currently_recording:
-                    # Cached says recording but actual says not - might be stale, check arecord
-                    try:
-                        import subprocess
-                        result = subprocess.run(["pgrep", "-f", f"arecord.*-D.*{audio_device}"], 
-                                              capture_output=True, timeout=0.1)
-                        if result.returncode == 0 and result.stdout.strip():
-                            # arecord is running but state says not recording - state is stale
-                            logger.debug("State says not recording but arecord process found - using arecord as truth")
-                            is_currently_recording = True
-                            # Try to get mode from state, default to manual
-                            if current_mode is None:
-                                current_mode = "manual"
-                            # If start_time is None, try to estimate it from file modification time
-                            # BUT: Only use file mtime if it's very recent (within last 5 minutes)
-                            # Otherwise, the file could be from an old recording and duration would be wrong
-                            if recording_start_time is None:
-                                try:
-                                    from pathlib import Path
-                                    import time
-                                    recordings_dir = Path(ms._recording_manager.recording_dir)
-                                    if recordings_dir.exists():
-                                        wav_files = list(recordings_dir.glob("recording_*.wav"))
-                                        if wav_files:
-                                            wav_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-                                            most_recent = wav_files[0]
-                                            file_mtime = most_recent.stat().st_mtime
-                                            current_time = time.time()
-                                            # Only estimate start_time if file was modified within last 5 minutes
-                                            # This prevents using old files that would give incorrect durations
-                                            if current_time - file_mtime < 300:  # 5 minutes = 300 seconds
-                                                recording_start_time = file_mtime
-                                            # If file is older, leave start_time as None (will show "● Recording" without duration)
-                                except:
-                                    pass
-                    except:
-                        pass  # If pgrep fails, just use the state we got
-                # If both cached and actual say False, trust it - don't check arecord
-            except:
-                pass  # If check fails, just use the state we got
+        if state:
+            display_is_recording = state['is_recording']
+            display_mode = state['mode']
+            display_start_time = state['start_time']
     except Exception as e:
         logger.debug(f"Error getting recording state: {e}")
-        is_currently_recording = False
-        current_mode = None
-        recording_start_time = None
-    
-    # Use optimistic state for immediate UI feedback, but sync with actual state
-    # This provides instant visual feedback while actual state catches up
-    # Thread-safe read of optimistic state
-    with _optimistic_state_lock:
-        optimistic_is_recording = _optimistic_state.get('is_recording', False)
-        optimistic_mode = _optimistic_state.get('mode')
-        optimistic_start_time = _optimistic_state.get('start_time')
-        pending_start = _optimistic_state.get('pending_start', False)
-        pending_stop = _optimistic_state.get('pending_stop', False)
-    
-    # Determine display state: use optimistic if pending, otherwise use actual
-    # This gives immediate feedback while operation is in progress
-    if pending_start and optimistic_is_recording:
-        # Start is pending and optimistic says recording - use optimistic for immediate feedback
-        display_is_recording = True
-        display_mode = optimistic_mode or "manual"
-        display_start_time = optimistic_start_time
-    elif pending_stop and not optimistic_is_recording:
-        # Stop is pending and optimistic says not recording - use optimistic for immediate feedback
-        display_is_recording = False
-        display_mode = None
-        display_start_time = None
-    else:
-        # No pending operations or optimistic state matches actual - use actual state
-        display_is_recording = is_currently_recording
-        display_mode = current_mode
-        display_start_time = recording_start_time
-        # Sync optimistic state with actual if no pending operations (thread-safe)
-        if not pending_start and not pending_stop:
-            with _optimistic_state_lock:
-                _optimistic_state['is_recording'] = is_currently_recording
-                _optimistic_state['mode'] = current_mode
-                _optimistic_state['start_time'] = recording_start_time
+        # Default to not recording on error
     
     # Calculate status based on display state
     if display_is_recording and display_start_time:

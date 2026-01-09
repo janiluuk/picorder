@@ -350,6 +350,58 @@ class TestRecordingManagerEdgeCases(unittest.TestCase):
                 # Should kill the process after timeout
                 mock_process.kill.assert_called_once()
 
+    def test_stop_recording_closes_file_handles_when_process_exists(self):
+        """Test that file handles are closed when recording_process is not None"""
+        with patch('recording_manager.Popen') as mock_popen:
+            mock_process = MagicMock()
+            mock_process.poll.return_value = None  # Process is running
+            mock_process.stdout = MagicMock()
+            mock_process.stderr = MagicMock()
+            mock_popen.return_value = mock_process
+            
+            # Start recording
+            self.manager.start_recording("plughw:0,0", mode="manual")
+            time.sleep(0.1)
+            
+            # Create a dummy recording file
+            recording_file = Path(self.recording_dir) / "recording_test.wav"
+            recording_file.touch()
+            
+            with patch.object(self.manager, '_recording_filename', recording_file):
+                result = self.manager.stop_recording()
+                
+                self.assertTrue(result)
+                # CRITICAL: File handles should be closed after stopping the process
+                mock_process.stdout.close.assert_called_once()
+                mock_process.stderr.close.assert_called_once()
+
+    def test_stop_recording_none_process_no_attribute_error(self):
+        """Test that stopping when recording_process is None doesn't cause AttributeError on file handles"""
+        # Set up state to indicate we were recording, but process is None
+        # This simulates the scenario where process was lost but state wasn't cleared
+        with self.manager._lock:
+            self.manager._is_recording = True
+            self.manager._recording_process = None  # Process is None
+            self.manager._recording_mode = "manual"
+            self.manager._recording_start_time = time.time()
+            # Create a recording file that exists
+            recording_file = Path(self.recording_dir) / "recording_test.wav"
+            recording_file.touch()
+            self.manager._recording_filename = recording_file
+        
+        # CRITICAL: This should NOT raise an AttributeError when trying to close file handles
+        # The bug was that file handle closing code was in the else block where recording_process is None
+        # and it tried to access recording_process.stdout and recording_process.stderr, causing AttributeError
+        try:
+            result = self.manager.stop_recording()
+            # Should complete without AttributeError
+            self.assertFalse(self.manager.is_recording, "State should be cleared")
+        except AttributeError as e:
+            if "stdout" in str(e) or "stderr" in str(e):
+                self.fail(f"Bug not fixed: AttributeError when accessing file handles on None process: {e}")
+            else:
+                raise  # Re-raise if it's a different AttributeError
+
     def test_rename_file_permission_error(self):
         """Test handling of permission error when renaming"""
         filename = Path(self.recording_dir) / "recording_test.wav"
