@@ -10,21 +10,17 @@ from recording_state import RecordingStateMachine, RecordingState
 ################################################################################
 # Recording menu - main interface
 
+# MEDIUM PRIORITY FIX: Code duplication (#12) - use helper functions
 config = load_config()
-# Use consistent default value - load_config() returns default_config which includes auto_record=True
-# Since load_config() always returns a dict with auto_record key (from default_config merge),
-# the key will always exist, but we use True as default for safety and consistency
-auto_record_enabled = config.get("auto_record", True)  # Match default_config in load_config()
-audio_device = config.get("audio_device", "plughw:0,0")
+auto_record_enabled = get_auto_record_enabled()
+audio_device = get_audio_device()
 
 def _1():
     # Toggle auto-record (allow turning OFF even without valid device)
     global auto_record_enabled, config
-    config = load_config()
-    audio_device = config.get("audio_device", "")
-    # CRITICAL FIX: Use same default as line 17 to ensure consistency
-    # load_config() returns default_config with auto_record=True, so use True as default here too
-    current_auto_record = config.get("auto_record", True)  # Match default_config and line 17
+    # MEDIUM PRIORITY FIX: Code duplication (#12) - use helper functions
+    audio_device = get_audio_device()
+    current_auto_record = get_auto_record_enabled()
     
     # Check if device is valid - skip validation to avoid blocking
     # Just check if device is configured, don't validate (validation can block)
@@ -105,21 +101,26 @@ def _1():
         # Still update display to provide visual feedback that the action was rejected
         try:
             update_display()
-        except:
+        except (AttributeError, pygame.error, OSError) as e:
+            logger.debug(f"Error updating display: {e}")
             pass  # Don't let display update block
         return
     
     # Update display - wrap in try-except to prevent blocking
     try:
         update_display()
-    except:
+    except (AttributeError, pygame.error, OSError) as e:
+        logger.debug(f"Error updating display: {e}")
         pass  # Don't let display update block
 
 # Queue for recording operations to avoid blocking UI
 # Use the shared queue from menu_settings so it persists across page navigations
 # Both queue and event must always be initialized together to prevent AttributeError
 if ms._recording_queue is None:
-    ms._recording_queue = Queue()
+    # MEDIUM PRIORITY FIX: Unbounded queue (#19) - add size limit to prevent memory exhaustion
+    # LOW PRIORITY FIX: Magic numbers (#13) - extracted to constant
+    MAX_QUEUE_SIZE = 100  # Reasonable limit: 100 operations (if worker is slow, we'll drop old operations)
+    ms._recording_queue = Queue(maxsize=MAX_QUEUE_SIZE)
 # Always ensure the event is initialized, even if queue already exists
 # This prevents crashes if queue persists but event doesn't (e.g., after page reload)
 if not hasattr(ms, '_recording_operation_in_progress') or ms._recording_operation_in_progress is None:
@@ -142,19 +143,22 @@ def _recording_worker():
     max_consecutive_errors = 10
     
     while True:
-        iteration += 1
         operation = None
         
         try:
-            # Get operation from queue with timeout
+            # PERFORMANCE FIX: Worker thread polling overhead (#8) - use blocking get without timeout
+            # This prevents unnecessary CPU usage from polling every 500ms
+            # Block indefinitely until an item is available (thread will wake on item arrival)
             try:
-                operation = _recording_queue.get(timeout=0.5)  # 500ms timeout
+                operation = _recording_queue.get(block=True, timeout=None)  # Block indefinitely
                 logger.info(f"Worker: Got operation from queue: {operation}")
                 consecutive_errors = 0  # Reset error counter on success
             except Empty:
-                # Normal timeout - queue is empty, continue waiting
-                if iteration % 100 == 0:  # Log every 100 iterations when idle
-                    logger.debug(f"Worker: Waiting for operations (iteration {iteration})")
+                # Should not happen with blocking=True and timeout=None, but handle gracefully
+                logger.warning("Worker: Unexpected Empty exception with blocking get")
+                # LOW PRIORITY FIX: Magic numbers (#13) - extracted to constant
+                WORKER_ERROR_SLEEP = 0.1  # 100ms - brief sleep to prevent tight loop
+                time.sleep(WORKER_ERROR_SLEEP)
                 continue
             
             if operation is None:  # Shutdown signal
@@ -170,7 +174,8 @@ def _recording_worker():
                 continue
             
             logger.info(f"Worker: Processing {op_type} operation (device={device}, mode={mode})")
-            logger.info(f"Worker: Queue size: {_recording_queue.qsize()}")
+            # THREAD SAFETY FIX: Queue qsize() without synchronization (#10) - removed for accuracy
+            # qsize() is not atomic and can be misleading, so we don't log it
             # Safely set operation in progress - check for None to prevent AttributeError
             if _recording_operation_in_progress is not None:
                 _recording_operation_in_progress.set()  # Mark operation as in progress
@@ -193,13 +198,13 @@ def _recording_worker():
                     # SIMPLIFIED STOP: Kill processes first, then call stop_recording()
                     logger.info("Worker: Processing STOP operation from queue")
                     
-                    # Get device from config
+                    # MEDIUM PRIORITY FIX: Code duplication (#12) - use helper function
                     audio_device = None
                     try:
-                        config = load_config()
-                        audio_device = config.get("audio_device", "")
+                        audio_device = get_audio_device()
                     except Exception as e:
-                        logger.warning(f"Worker: Could not load config: {e}")
+                        logger.warning(f"Worker: Could not get audio device: {e}")
+                        audio_device = ""
                     
                     # Kill arecord processes FIRST (most reliable)
                     if audio_device:
@@ -248,9 +253,11 @@ def _recording_worker():
                     logger.warning("Worker: _recording_operation_in_progress is None, skipping clear()")
                 try:
                     _recording_queue.task_done()
-                except:
+                except (AttributeError, TypeError) as e:
+                    logger.debug(f"Error calling task_done(): {e}")
                     pass  # Ignore errors in task_done()
-                logger.info(f"Worker: Completed {op_type}. Queue size: {_recording_queue.qsize()}")
+                logger.info(f"Worker: Completed {op_type} operation")
+                # THREAD SAFETY FIX: Queue qsize() without synchronization (#10) - removed
                 
         except Exception as e:
             # Outer exception handler - catch any unexpected errors
@@ -259,7 +266,9 @@ def _recording_worker():
             if consecutive_errors >= max_consecutive_errors:
                 logger.critical(f"Worker: {max_consecutive_errors} consecutive errors - worker may be stuck!")
                 consecutive_errors = 0
-                time.sleep(0.1)  # Small delay to prevent tight error loop
+                # LOW PRIORITY FIX: Magic numbers (#13) - extracted to constant  
+                WORKER_ERROR_SLEEP = 0.1  # 100ms - small delay to prevent tight error loop
+                time.sleep(WORKER_ERROR_SLEEP)
             # Safely clear - check for None to prevent AttributeError
             if _recording_operation_in_progress is not None:
                 _recording_operation_in_progress.clear()
@@ -289,17 +298,18 @@ def _2():
         _2._last_call_time = 0
     current_time = time.time()
     time_since_last_call = current_time - _2._last_call_time
-    if time_since_last_call < 0.2:  # 200ms debounce
+    # LOW PRIORITY FIX: Magic numbers (#13) - extracted to constant
+    BUTTON_DEBOUNCE_TIME = 0.2  # 200ms debounce to prevent double-clicks
+    if time_since_last_call < BUTTON_DEBOUNCE_TIME:
         logger.debug(f"_2(): Ignoring rapid click (debounce: {time_since_last_call:.3f}s)")
         return
     _2._last_call_time = current_time
     
-    # Get device from config (quick, non-blocking)
+    # MEDIUM PRIORITY FIX: Code duplication (#12) - use helper function
     try:
-        config = load_config()
-        device = config.get("audio_device", "")
+        device = get_audio_device()
     except Exception as e:
-        logger.warning(f"_2(): Could not load config: {e}")
+        logger.warning(f"_2(): Could not get audio device: {e}")
         return
     
     if not device:
@@ -323,23 +333,33 @@ def _2():
             # Currently recording - queue stop
             logger.info("_2(): Queuing STOP operation")
             _recording_queue.put_nowait(("stop", None, None))
-            logger.info(f"_2(): Stop queued. Queue size: {_recording_queue.qsize()}")
+            logger.info("_2(): Stop operation queued")
+            # THREAD SAFETY FIX: Queue qsize() without synchronization (#10) - removed for accuracy
         else:
             # Not recording - queue start
             logger.info(f"_2(): Queuing START operation for device: {device}")
             _recording_queue.put_nowait(("start", device, "manual"))
-            logger.info(f"_2(): Start queued. Queue size: {_recording_queue.qsize()}")
+            logger.info("_2(): Start operation queued")
+            # THREAD SAFETY FIX: Queue qsize() without synchronization (#10) - removed
     except (queue_module.Full, AttributeError, TypeError) as e:
-        # Fallback with timeout if put_nowait fails
-        logger.warning(f"_2(): put_nowait failed: {e}, trying timeout fallback")
-        try:
-            if is_recording:
-                _recording_queue.put(("stop", None, None), timeout=0.01)
-            else:
-                _recording_queue.put(("start", device, "manual"), timeout=0.01)
-            logger.info("_2(): Operation queued with timeout fallback")
-        except Exception as e2:
-            logger.error(f"_2(): Failed to queue operation: {e2}")
+        # MEDIUM PRIORITY FIX: Unbounded queue (#19) - handle Full exception for bounded queue
+        if isinstance(e, queue_module.Full):
+            logger.warning("_2(): Queue is full - dropping operation (worker may be slow)")
+            # Could implement queue drop policy (drop oldest, drop this, etc.)
+            # For now, just log and continue - better to drop than block UI
+        else:
+            # Fallback with timeout if put_nowait fails for other reasons
+            logger.warning(f"_2(): put_nowait failed: {e}, trying timeout fallback")
+            try:
+                if is_recording:
+                    # LOW PRIORITY FIX: Magic numbers (#13) - extracted to constant
+                    QUEUE_FALLBACK_TIMEOUT = 0.01  # 10ms - short timeout for fallback queue operations
+                    _recording_queue.put(("stop", None, None), timeout=QUEUE_FALLBACK_TIMEOUT)
+                else:
+                    _recording_queue.put(("start", device, "manual"), timeout=QUEUE_FALLBACK_TIMEOUT)
+                logger.info("_2(): Operation queued with timeout fallback")
+            except Exception as e2:
+                logger.error(f"_2(): Failed to queue operation: {e2}")
     except Exception as e:
         logger.error(f"_2(): Unexpected error queuing operation: {e}", exc_info=True)
     
@@ -371,9 +391,9 @@ def auto_record_monitor():
     import menu_settings as ms
     import time
     while True:
-        config = load_config()  # Reload config in case it changed
-        auto_record_enabled = config.get("auto_record", True)  # Match default_config in load_config()
-        audio_device = config.get("audio_device", "")
+        # MEDIUM PRIORITY FIX: Code duplication (#12) - use helper functions
+        auto_record_enabled = get_auto_record_enabled()
+        audio_device = get_audio_device()
         
         # Get recording state in a single thread-safe operation to avoid race conditions
         # Use get_recording_state() to get both values atomically
@@ -468,10 +488,9 @@ def update_display():
     # Skip validation entirely to avoid blocking - just use config values
     # Use cached config if available to avoid file I/O on every update
     try:
-        # Try to get config quickly - use cached version if possible
-        config = load_config()
-        audio_device = config.get("audio_device", "")
-        auto_record_enabled = config.get("auto_record", True)  # Match default_config in load_config()
+        # MEDIUM PRIORITY FIX: Code duplication (#12) - use helper functions (cache-aware)
+        audio_device = get_audio_device()
+        auto_record_enabled = get_auto_record_enabled()
         # Don't validate device here - it blocks! Just assume it might be valid
         # Validation can happen in background or be skipped for display purposes
         device_valid = bool(audio_device)  # Just check if device is configured, don't validate
@@ -524,7 +543,8 @@ def update_display():
             # Audio level can be checked less frequently or in background
             audio_level = 0.0  # Don't check audio level - it blocks!
             show_meter = True
-        except Exception:
+        except (AttributeError, OSError) as e:
+            logger.debug(f"Error getting audio level: {e}")
             pass  # If getting audio level fails, just don't show meter
     
     # Update names with current status
@@ -589,7 +609,8 @@ def update_display():
         # Don't let display update errors break the callback
         try:
             pygame.event.pump()
-        except:
+        except (AttributeError, pygame.error) as e:
+            logger.debug(f"Error pumping events: {e}")
             pass
 
 # Start auto-record monitor thread
@@ -622,7 +643,8 @@ try:
             status = f"● {mode_str}: {minutes:02d}:{seconds:02d}"
         else:
             status = "Ready"
-    except:
+    except (AttributeError, OSError, KeyError) as e:
+        logger.debug(f"Error getting initial recording state: {e}")
         status = "Ready"  # Default status if we can't get state
     
     names = [status, "Auto", "Record", "Settings", "Library", "Screen Off", ""]
@@ -640,13 +662,13 @@ try:
         state = ms._recording_manager.get_recording_state(blocking=False)
         if state and state['is_recording']:
             button_colors[2] = red  # Red background when recording
-        # Check auto-record status
-        config = load_config()
-        auto_record_enabled = config.get("auto_record", True)  # Match default_config in load_config()
-        audio_device = config.get("audio_device", "")
+        # MEDIUM PRIORITY FIX: Code duplication (#12) - use helper functions
+        auto_record_enabled = get_auto_record_enabled()
+        audio_device = get_audio_device()
         if auto_record_enabled and audio_device:
             button_colors[1] = green  # Green background when auto-record is enabled
-    except:
+    except (AttributeError, OSError, KeyError) as e:
+        logger.debug(f"Error getting initial state for button colors: {e}")
         pass  # If we can't get state, just don't set colors
     
     # Make sure we draw everything: label1 (status), buttons for Auto/Record (b12), Settings and Screen Off (b34)

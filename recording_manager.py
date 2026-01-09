@@ -14,9 +14,18 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Constants
+# LOW PRIORITY FIX: Magic numbers (#13) - extracted to named constants
 PROCESS_TERMINATE_TIMEOUT = 2  # seconds
 PROCESS_KILL_DELAY = 0.5  # seconds
 MIN_FREE_DISK_SPACE_GB = 0.1  # Minimum free disk space required for recording (100MB)
+
+# Process startup delays (non-blocking checks)
+PROCESS_STARTUP_CHECK_DELAY = 0.005  # 5ms - minimal delay for immediate failures
+PROCESS_RETRY_DELAY = 0.01  # 10ms - delay before retry after cleanup
+PROCESS_POLL_TIMEOUT = 0.05  # 50ms - timeout for process cleanup operations
+PROCESS_TERMINATE_TIMEOUT_SHORT = 0.1  # 100ms - short timeout for quick cleanup
+PROCESS_TERMINATE_TIMEOUT_MEDIUM = 0.2  # 200ms - medium timeout for cleanup
+SUBPROCESS_TIMEOUT = 0.05  # 50ms - timeout for subprocess operations
 
 
 class RecordingManager:
@@ -139,7 +148,8 @@ class RecordingManager:
                                                 most_recent = wav_files[0]
                                                 # Estimate start time from file modification time
                                                 start_time_estimate = most_recent.stat().st_mtime
-                                    except:
+                                    except (OSError, IOError, PermissionError, AttributeError):
+                                        # File system error or invalid path - use current time
                                         pass
                                     if start_time_estimate is None:
                                         import time
@@ -150,9 +160,11 @@ class RecordingManager:
                                         'mode': 'manual',  # Default to manual if unknown
                                         'start_time': start_time_estimate
                                     }
-                        except:
+                        except (subprocess.TimeoutExpired, subprocess.SubprocessError, AttributeError) as e:
+                            logger.debug(f"Error checking for arecord processes: {e}")
                             pass
-                    except:
+                    except (OSError, IOError) as e:
+                        logger.debug(f"Error reading config for arecord check: {e}")
                         pass
                 return cached_state
     
@@ -160,14 +172,18 @@ class RecordingManager:
         """Kill any zombie arecord processes that might be holding the device"""
         # Use a very short timeout to avoid blocking the UI
         # If cleanup takes too long, just skip it and try anyway
+        # MEDIUM PRIORITY FIX: Subprocess shell injection (#35) - use argument list instead of shell=True
         try:
-            import shlex
-            # Escape device for shell safety
-            device_escaped = shlex.quote(device)
-            cmd = f"pgrep -f 'arecord.*-D.*{device_escaped}'"
-            # Use very short timeout - if it takes longer, skip cleanup
-            # Reduced to 0.05s to minimize blocking
-            result = subprocess.run(cmd, shell=True, capture_output=True, timeout=0.05, text=True)
+            # Use argument list instead of shell=True to prevent command injection
+            # Build pattern safely without shell interpretation
+            pattern = f"arecord.*-D.*{device}"
+            # Use pgrep with -f flag and pattern as argument (not in shell string)
+            result = subprocess.run(
+                ["pgrep", "-f", pattern],
+                capture_output=True,
+                timeout=SUBPROCESS_TIMEOUT,
+                text=True
+            )
             if result.returncode == 0 and result.stdout.strip():
                 pids = result.stdout.strip().split('\n')
                 logger.warning(f"Found {len(pids)} zombie arecord process(es) for device {device}, killing...")
@@ -228,7 +244,7 @@ class RecordingManager:
             
             # Give it a very brief moment to fail if device is invalid or busy (non-blocking check)
             # This allows arecord to fail immediately if device doesn't exist or is busy
-            time.sleep(0.005)  # 5ms - minimal delay, just enough for immediate failures
+            time.sleep(PROCESS_STARTUP_CHECK_DELAY)
             
             # Check if process already failed (non-blocking poll)
             return_code = recording_process.poll()
@@ -240,7 +256,8 @@ class RecordingManager:
                     import select
                     if select.select([recording_process.stderr], [], [], 0)[0]:
                         stderr_output = recording_process.stderr.read(1024)
-                except:
+                except (OSError, AttributeError, ValueError, select.error):
+                    # select failed, pipe closed, or invalid - ignore
                     pass
                 
                 error_msg = stderr_output.decode('utf-8', errors='ignore').strip()
@@ -248,60 +265,100 @@ class RecordingManager:
                 # Check if it's a "device busy" error - try cleanup and retry once
                 if "Device or resource busy" in error_msg or "device busy" in error_msg.lower():
                     logger.warning(f"Device busy, attempting cleanup and retry...")
-                    # Clean up the failed process first
-                    try:
-                        recording_process.terminate()
+                    # CRITICAL FIX: Clean up failed process with specific exception handling
+                    # Use shorter timeout to reduce blocking
                         try:
-                            recording_process.wait(timeout=0.1)
-                        except:
-                            recording_process.kill()
-                    except:
-                        pass
+                            recording_process.terminate()
+                            try:
+                                recording_process.wait(timeout=PROCESS_POLL_TIMEOUT)
+                        except (TimeoutExpired, AttributeError, ProcessLookupError):
+                            # Process didn't terminate quickly - kill it
+                            try:
+                                recording_process.kill()
+                                # Don't wait for kill - it should be immediate
+                            except (ProcessLookupError, AttributeError):
+                                pass  # Process already dead
+                        # Close file handles to prevent resource leak
+                        try:
+                            if recording_process.stdout:
+                                recording_process.stdout.close()
+                            if recording_process.stderr:
+                                recording_process.stderr.close()
+                        except (AttributeError, OSError):
+                            pass  # Handles already closed
+                    except (AttributeError, ProcessLookupError) as e:
+                        logger.debug(f"Error cleaning up failed process: {e}")
                     
                     # Only now do we try to kill zombie processes (lazy cleanup)
                     # Use a very short timeout to avoid blocking
                     self._kill_zombie_arecord_processes(device)
-                    time.sleep(0.02)  # Reduced from 0.05s - minimal delay (20ms)
+                    time.sleep(PROCESS_RETRY_DELAY)
                     
-                    # Try once more
-                    recording_process = Popen(cmd, stdout=PIPE, stderr=PIPE)
-                    time.sleep(0.005)
-                    return_code = recording_process.poll()
+                    # Try once more - CRITICAL FIX: Close handles from original process before retry
+                    retry_process = Popen(cmd, stdout=PIPE, stderr=PIPE)
+                    time.sleep(PROCESS_STARTUP_CHECK_DELAY)
+                    return_code = retry_process.poll()
                     if return_code is not None:
                         # Still failed after retry
                         stderr_output = b""
                         try:
                             import select
-                            if select.select([recording_process.stderr], [], [], 0)[0]:
-                                stderr_output = recording_process.stderr.read(1024)
-                        except:
-                            pass
+                            if select.select([retry_process.stderr], [], [], 0)[0]:
+                                stderr_output = retry_process.stderr.read(1024)
+                        except (OSError, AttributeError, ValueError):
+                            pass  # select failed or pipe closed
                         error_msg = stderr_output.decode('utf-8', errors='ignore').strip()
                         logger.error(f"arecord failed after retry (exit code {return_code}): {error_msg}")
+                        # Clean up retry process
                         try:
-                            recording_process.terminate()
+                            retry_process.terminate()
                             try:
-                                recording_process.wait(timeout=0.1)
-                            except:
-                                recording_process.kill()
-                        except:
-                            pass
+                                retry_process.wait(timeout=PROCESS_POLL_TIMEOUT)
+                            except (TimeoutExpired, AttributeError, ProcessLookupError):
+                                try:
+                                    retry_process.kill()
+                                except (ProcessLookupError, AttributeError):
+                                    pass
+                            # Close file handles
+                            try:
+                                if retry_process.stdout:
+                                    retry_process.stdout.close()
+                                if retry_process.stderr:
+                                    retry_process.stderr.close()
+                            except (AttributeError, OSError):
+                                pass
+                        except (AttributeError, ProcessLookupError) as e:
+                            logger.debug(f"Error cleaning up retry process: {e}")
                         # Clear the starting flag on failure
                         with self._lock:
                             self._starting_recording = False
                         return False
-                    # Retry succeeded - fall through to success case
+                    # Retry succeeded - use the new process
+                    recording_process = retry_process
+                    # Fall through to success case
                 else:
                     # Other error (not device busy)
                     logger.error(f"arecord failed immediately (exit code {return_code}): {error_msg}")
+                    # CRITICAL FIX: Clean up with specific exceptions and shorter timeout
                     try:
                         recording_process.terminate()
                         try:
-                            recording_process.wait(timeout=0.5)
-                        except:
-                            recording_process.kill()
-                    except:
-                        pass
+                            recording_process.wait(timeout=PROCESS_TERMINATE_TIMEOUT_MEDIUM)
+                        except (TimeoutExpired, AttributeError, ProcessLookupError):
+                            try:
+                                recording_process.kill()
+                            except (ProcessLookupError, AttributeError):
+                                pass
+                        # Close file handles
+                        try:
+                            if recording_process.stdout:
+                                recording_process.stdout.close()
+                            if recording_process.stderr:
+                                recording_process.stderr.close()
+                        except (AttributeError, OSError):
+                            pass
+                    except (AttributeError, ProcessLookupError) as e:
+                        logger.debug(f"Error cleaning up failed process: {e}")
                     # Clear the starting flag on failure
                     with self._lock:
                         self._starting_recording = False
@@ -440,7 +497,8 @@ class RecordingManager:
                                     # Try to get duration from file size or use a default
                                     # For now, just log it
                                     logger.info(f"Most recent recording file: {most_recent}")
-                        except:
+                        except (OSError, IOError, PermissionError, AttributeError) as e:
+                            logger.debug(f"Error finding most recent recording file: {e}")
                             pass
                         return True  # Consider it successful if we killed the process
                     else:
@@ -534,7 +592,8 @@ class RecordingManager:
             try:
                 os.kill(pid, 15)  # SIGTERM
                 time.sleep(0.5)
-            except Exception:
+            except (ProcessLookupError, PermissionError, OSError) as e:
+                logger.debug(f"Error killing silentjack process {pid}: {e}")
                 pass
             
             # Rename file with duration
@@ -544,14 +603,16 @@ class RecordingManager:
                 if new_filename:
                     try:
                         old_filename.rename(new_filename)
-                    except Exception:
+                    except (OSError, PermissionError, FileNotFoundError) as e:
+                        logger.debug(f"Error renaming silentjack recording file: {e}")
                         pass
             
             # Clean up files
             for f in [self.recording_pid_file, self.recording_file_file, self.recording_start_file]:
                 try:
                     f.unlink(missing_ok=True)
-                except Exception:
+                except (OSError, PermissionError) as e:
+                    logger.debug(f"Error cleaning up silentjack file {f}: {e}")
                     pass
             
             logger.info("Stopped silentjack recording")
@@ -608,12 +669,14 @@ class RecordingManager:
                             try:
                                 os.kill(pid, 0)  # Check if process exists
                                 silentjack_recording = True
-                            except Exception:
+                            except (ProcessLookupError, PermissionError, OSError):
                                 # Process doesn't exist, clean up
                                 self._cleanup_silentjack_files()
-                        except Exception:
+                        except (ValueError, OSError, IOError) as e:
+                            logger.debug(f"Error reading silentjack PID file: {e}")
                             pass
-                except Exception:
+                except (OSError, IOError) as e:
+                    logger.debug(f"Error checking silentjack recording files: {e}")
                     pass
             
             # Determine current recording state
@@ -838,9 +901,11 @@ fi
             try:
                 os.kill(pid, 0)  # Check if process exists
                 return True, start_time
-            except Exception:
+            except (ProcessLookupError, PermissionError, OSError):
+                # Process doesn't exist - clean up and return False
                 self._cleanup_silentjack_files()
                 return False, None
-        except Exception:
+        except (ValueError, OSError, IOError) as e:
+            logger.debug(f"Error checking silentjack recording: {e}")
             return False, None
 

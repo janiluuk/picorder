@@ -140,6 +140,12 @@ MAX_DEVICE_NAME_LENGTH = 20
 _device_validation_cache = {}
 _device_cache_lock = threading.Lock()
 
+# Config cache to reduce file I/O (CRITICAL FIX: Excessive load_config() calls)
+_config_cache = None
+_config_cache_time = 0
+_config_cache_lock = threading.Lock()
+CONFIG_CACHE_TTL = 1.0  # Cache config for 1 second to balance freshness and performance
+
 ################################################################################
 
 def exit_menu():
@@ -352,35 +358,89 @@ def get_current_device_config():
     
     return config, audio_device, auto_record, device_valid
 
-def load_config():
-    """Load configuration from file"""
+def load_config(force_reload=False):
+    """Load configuration from file with caching to reduce file I/O
+    
+    Args:
+        force_reload: If True, bypass cache and reload from file
+        
+    Returns:
+        dict: Configuration dictionary
+    """
+    global _config_cache, _config_cache_time
+    
     default_config = {
         "audio_device": "plughw:0,0",
         "auto_record": True  # Default to True - all code uses True as default for consistency
     }
+    
+    # CRITICAL FIX: Use cached config if valid and not forcing reload
+    current_time = time.time()
+    with _config_cache_lock:
+        if not force_reload and _config_cache is not None:
+            age = current_time - _config_cache_time
+            if age < CONFIG_CACHE_TTL:
+                # Cache is still valid
+                return _config_cache.copy()  # Return copy to prevent external modification
+    
+    # Cache expired or forced reload - load from file
     try:
         config_path = Path(CONFIG_FILE)
         if config_path.exists():
             with open(config_path, 'r') as f:
                 config = json.load(f)
-                return {**default_config, **config}
+                result = {**default_config, **config}
+        else:
+            result = default_config.copy()
     except (OSError, IOError, json.JSONDecodeError) as e:
         logger.warning(f"Error loading config: {e}, using defaults")
+        result = default_config.copy()
     except Exception as e:
         logger.error(f"Unexpected error loading config: {e}", exc_info=True)
-    return default_config
+        result = default_config.copy()
+    
+    # Update cache
+    with _config_cache_lock:
+        _config_cache = result.copy()
+        _config_cache_time = current_time
+    
+    return result
 
 def save_config(config):
-    """Save configuration to file"""
+    """Save configuration to file and invalidate cache"""
+    global _config_cache
     try:
         config_path = Path(CONFIG_FILE)
         config_path.parent.mkdir(parents=True, exist_ok=True)
         with open(config_path, 'w') as f:
             json.dump(config, f)
+        
+        # CRITICAL FIX: Invalidate cache after saving to ensure consistency
+        with _config_cache_lock:
+            _config_cache = None  # Invalidate cache so next load_config() reloads from file
+            _config_cache_time = 0
     except (OSError, IOError) as e:
         logger.error(f"Error saving config: {e}")
     except Exception as e:
         logger.error(f"Unexpected error saving config: {e}", exc_info=True)
+
+def get_auto_record_enabled():
+    """Get auto_record setting from config (MEDIUM PRIORITY FIX: Code duplication #12)
+    
+    Returns:
+        bool: True if auto_record is enabled, False otherwise
+    """
+    config = load_config()
+    return config.get("auto_record", True)  # Consistent default with load_config()
+
+def get_audio_device():
+    """Get audio_device setting from config (MEDIUM PRIORITY FIX: Code duplication #12)
+    
+    Returns:
+        str: Audio device string, empty string if not set
+    """
+    config = load_config()
+    return config.get("audio_device", "plughw:0,0")
 
 def get_audio_devices():
     """Get list of available audio input devices"""

@@ -1,14 +1,38 @@
 #!/usr/bin/env python3
 from menu_settings import *
 import os
+import threading
+import subprocess
+from subprocess import Popen, PIPE, TimeoutExpired
 from pathlib import Path
 
 ################################################################################
 # Library menu - Browse and manage recordings
 
 # Get list of recordings
-def get_recordings():
-    """Get list of all recording files, sorted by modification time (newest first)"""
+def get_recordings(force_refresh=False):
+    """Get list of all recording files, sorted by modification time (newest first)
+    
+    PERFORMANCE FIX: Repeated directory scans (#7) - cache results to reduce disk I/O
+    
+    Args:
+        force_refresh: If True, bypass cache and reload from disk
+        
+    Returns:
+        list: List of recording dictionaries
+    """
+    global _recordings_cache, _recordings_cache_time
+    import time as time_module
+    
+    # Check cache first (unless forcing refresh)
+    current_time = time_module.time()
+    if not force_refresh and _recordings_cache is not None:
+        age = current_time - _recordings_cache_time
+        if age < RECORDINGS_CACHE_TTL:
+            # Cache is still valid
+            return _recordings_cache.copy()  # Return copy to prevent external modification
+    
+    # Cache expired or forced refresh - scan directory
     recordings = []
     try:
         recording_dir = Path(RECORDING_DIR)
@@ -28,23 +52,73 @@ def get_recordings():
                     })
             # Sort by modification time (newest first)
             recordings.sort(key=lambda x: x['mod_time'], reverse=True)
+    except (OSError, IOError, PermissionError) as e:
+        logger.error(f"Error getting recordings: {e}", exc_info=True)
     except Exception as e:
-        logger.error(f"Error getting recordings: {e}")
+        logger.error(f"Unexpected error getting recordings: {e}", exc_info=True)
+    
+    # Update cache
+    _recordings_cache = recordings.copy()
+    _recordings_cache_time = current_time
+    
     return recordings
+
+# PERFORMANCE FIX: Repeated directory scans (#7) - cache recordings list
+_recordings_cache = None
+_recordings_cache_time = 0
+RECORDINGS_CACHE_TTL = 2.0  # Cache recordings for 2 seconds
 
 # Scrolling state
 scroll_offset = 0
 recordings = []
 selected_index = 0
 
-# Playback state
+# Playback state - thread-safe with lock
+# CRITICAL FIX: Use lock to prevent race conditions and ensure proper cleanup
+import threading
 playback_process = None
 is_playing = False
+_playback_lock = threading.Lock()
+
+def _stop_playback_safe():
+    """Stop playback safely with lock - ensures proper cleanup"""
+    global playback_process, is_playing
+    with _playback_lock:
+        try:
+            if playback_process is not None:
+                playback_process.terminate()
+                try:
+                    playback_process.wait(timeout=0.5)
+                except (TimeoutExpired, AttributeError, ProcessLookupError):
+                    try:
+                        playback_process.kill()
+                    except (ProcessLookupError, AttributeError):
+                        pass  # Process already dead
+                # Close file handles to prevent resource leak
+                try:
+                    if playback_process.stdout:
+                        playback_process.stdout.close()
+                    if playback_process.stderr:
+                        playback_process.stderr.close()
+                except (AttributeError, OSError):
+                    pass  # Handles already closed or invalid
+                playback_process = None
+            is_playing = False
+            # Also kill any remaining aplay processes (best effort)
+            try:
+                import subprocess
+                subprocess.run(["pkill", "-f", "aplay"], timeout=0.3, capture_output=True)
+            except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
+                pass  # pkill not available or failed
+        except Exception as e:
+            logger.error(f"Error stopping playback: {e}", exc_info=True)
+            is_playing = False
+            playback_process = None
 
 def refresh_recordings():
-    """Refresh the recordings list"""
+    """Refresh the recordings list (forces cache refresh)"""
     global recordings
-    recordings = get_recordings()
+    recordings = get_recordings(force_refresh=True)
 
 def _1():
     """Up / Previous recording"""
@@ -77,18 +151,62 @@ def _2():
     update_display()
 
 def _3():
-    """Play selected recording"""
-    global recordings, selected_index
-    if 0 <= selected_index < len(recordings):
-        recording = recordings[selected_index]
-        file_path = recording['path']
-        # Play using aplay (non-blocking)
-        try:
-            # Use aplay to play the file in background
-            Popen(["aplay", str(file_path)], stdout=PIPE, stderr=PIPE)
-            logger.info(f"Playing recording: {file_path}")
-        except Exception as e:
-            logger.error(f"Error playing recording: {e}")
+    """Play/Stop selected recording - toggle playback"""
+    global recordings, selected_index, playback_process, is_playing, _playback_lock
+    
+    # Thread-safe check of playback state
+    with _playback_lock:
+        currently_playing = is_playing
+        current_process = playback_process
+    
+    if currently_playing:
+        # Currently playing - stop playback (thread-safe)
+        logger.info("Stopping playback")
+        _stop_playback_safe()
+        update_display()
+    else:
+        # Not playing - start playback (thread-safe)
+        if 0 <= selected_index < len(recordings):
+            recording = recordings[selected_index]
+            file_path = recording['path']
+            try:
+                # Stop any existing playback first (thread-safe)
+                with _playback_lock:
+                    if playback_process is not None:
+                        try:
+                            playback_process.terminate()
+                            playback_process.wait(timeout=0.3)
+                        except (TimeoutExpired, AttributeError, ProcessLookupError):
+                            try:
+                                playback_process.kill()
+                            except (ProcessLookupError, AttributeError):
+                                pass
+                        try:
+                            if playback_process.stdout:
+                                playback_process.stdout.close()
+                            if playback_process.stderr:
+                                playback_process.stderr.close()
+                        except (AttributeError, OSError):
+                            pass
+                        playback_process = None
+                
+                # Start new playback (non-blocking, thread-safe)
+                new_process = Popen(["aplay", str(file_path)], stdout=PIPE, stderr=PIPE)
+                with _playback_lock:
+                    playback_process = new_process
+                    is_playing = True
+                logger.info(f"Playing recording: {file_path}")
+                update_display()
+            except (OSError, ValueError, subprocess.SubprocessError) as e:
+                logger.error(f"Error playing recording: {e}", exc_info=True)
+                with _playback_lock:
+                    is_playing = False
+                    playback_process = None
+            except Exception as e:
+                logger.error(f"Unexpected error playing recording: {e}", exc_info=True)
+                with _playback_lock:
+                    is_playing = False
+                    playback_process = None
 
 def _4():
     """Delete selected recording"""
@@ -97,22 +215,34 @@ def _4():
         recording = recordings[selected_index]
         file_path = recording['path']
         try:
+            # Stop playback if playing (thread-safe)
+            _stop_playback_safe()
+            
             # Delete the file
             file_path.unlink()
             logger.info(f"Deleted recording: {file_path}")
-            # Refresh list and adjust selection
+            # PERFORMANCE FIX: Invalidate cache after file deletion
+            global _recordings_cache
+            _recordings_cache = None
+            # Refresh list and adjust selection (force refresh after delete)
             refresh_recordings()
             if selected_index >= len(recordings):
                 selected_index = max(0, len(recordings) - 1)
             if scroll_offset >= len(recordings):
                 scroll_offset = max(0, len(recordings) - 1)
             update_display()
+        except (OSError, PermissionError) as e:
+            logger.error(f"Error deleting recording: {e}", exc_info=True)
+            update_display()  # Update display even on error
         except Exception as e:
-            logger.error(f"Error deleting recording: {e}")
+            logger.error(f"Unexpected error deleting recording: {e}", exc_info=True)
             update_display()  # Update display even on error
 
 def _5():
     """Back to main menu"""
+    # CRITICAL FIX: Clean up playback process before navigating away
+    # This prevents resource leak when user navigates away while playing
+    _stop_playback_safe()
     go_to_page(PAGE_01)
 
 def _6():
@@ -125,7 +255,40 @@ def _6():
 
 def update_display():
     """Update display with current recordings list"""
-    global screen, names, recordings, scroll_offset, selected_index
+    global screen, names, recordings, scroll_offset, selected_index, playback_process, is_playing, _playback_lock
+    
+    # Thread-safe check if playback process is still alive
+    with _playback_lock:
+        currently_playing = is_playing
+        current_process = playback_process
+    
+    if currently_playing and current_process is not None:
+        try:
+            # Check if process has finished (non-blocking poll)
+            if current_process.poll() is not None:
+                # Process finished - update state thread-safely
+                with _playback_lock:
+                    is_playing = False
+                    # Close file handles
+                    try:
+                        if playback_process.stdout:
+                            playback_process.stdout.close()
+                        if playback_process.stderr:
+                            playback_process.stderr.close()
+                    except (AttributeError, OSError):
+                        pass
+                    playback_process = None
+        except (AttributeError, ProcessLookupError) as e:
+            # Process reference invalid - clear state
+            logger.debug(f"Playback process invalid: {e}")
+            with _playback_lock:
+                is_playing = False
+                playback_process = None
+        except Exception as e:
+            logger.debug(f"Error checking playback process: {e}")
+            with _playback_lock:
+                is_playing = False
+                playback_process = None
     
     # Refresh recordings if empty
     if not recordings:
@@ -165,7 +328,15 @@ def update_display():
         
         names[2] = ""  # Not used (only showing 1 item)
         
-        names[3] = "Play"   # Button 3
+        # Button 3: Play/Stop based on playback state (use thread-safe value)
+        # Get current state atomically for display
+        with _playback_lock:
+            display_is_playing = is_playing
+        if display_is_playing:
+            names[3] = "Stop"   # Show "Stop" when playing
+        else:
+            names[3] = "Play"   # Show "Play" when not playing
+        
         names[4] = "Delete" # Button 4
         names[5] = "Back"   # Button 5
         names[6] = "Refresh" # Button 6
@@ -173,9 +344,17 @@ def update_display():
     # Redraw screen
     screen.fill(black)
     draw_screen_border(screen)
+    
+    # Prepare button colors - make Play/Stop button green when playing (use thread-safe value)
+    button_colors = {}
+    with _playback_lock:
+        display_is_playing = is_playing
+    if display_is_playing:
+        button_colors[3] = green  # Green background when playing
+    
     # Draw: label1 (title), label2 (recording), buttons for Play/Delete (b34), Back (b56)
     # Don't use b12 for up/down - we'll draw small custom buttons instead
-    populate_screen(names, screen, b12=False, b34=True, b56=True, label1=True, label2=True, label3=False)
+    populate_screen(names, screen, b12=False, b34=True, b56=True, label1=True, label2=True, label3=False, button_colors=button_colors)
     
     # Draw up/down buttons on the right side - moved up and made bigger
     import pygame
