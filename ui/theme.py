@@ -1,13 +1,40 @@
 """Theme settings for the modern 320x240 UI."""
 
-SCREEN_WIDTH = 320
-SCREEN_HEIGHT = 240
-TOP_BAR_HEIGHT = 28
-NAV_BAR_HEIGHT = 52
+# Base dimensions for Raspberry Pi TFT display (320x240)
+BASE_SCREEN_WIDTH = 320
+BASE_SCREEN_HEIGHT = 240
+BASE_TOP_BAR_HEIGHT = 28
+BASE_NAV_BAR_HEIGHT = 52
+BASE_PADDING_X = 10
+BASE_PADDING_Y = 8
+BASE_CORNER_RADIUS = 10
+BASE_SMALL_FONT_SIZE = 16
+BASE_MEDIUM_FONT_SIZE = 20
+BASE_LARGE_FONT_SIZE = 34
 
-PADDING_X = 10
-PADDING_Y = 8
-CORNER_RADIUS = 10
+# Detect if running on desktop (not Raspberry Pi)
+def _is_desktop():
+    """Detect if running on desktop (not Raspberry Pi)"""
+    try:
+        import os
+        with open('/proc/cpuinfo', 'r') as f:
+            cpuinfo = f.read()
+            return not ('Raspberry Pi' in cpuinfo or 'BCM' in cpuinfo)
+    except (OSError, IOError):
+        return True  # Assume desktop if can't detect
+
+# Scale factor for desktop mode (2.5x makes it much bigger but still reasonable)
+DESKTOP_SCALE = 2.5 if _is_desktop() else 1.0
+
+# Scaled dimensions
+SCREEN_WIDTH = int(BASE_SCREEN_WIDTH * DESKTOP_SCALE)
+SCREEN_HEIGHT = int(BASE_SCREEN_HEIGHT * DESKTOP_SCALE)
+TOP_BAR_HEIGHT = int(BASE_TOP_BAR_HEIGHT * DESKTOP_SCALE)
+NAV_BAR_HEIGHT = int(BASE_NAV_BAR_HEIGHT * DESKTOP_SCALE)
+
+PADDING_X = int(BASE_PADDING_X * DESKTOP_SCALE)
+PADDING_Y = int(BASE_PADDING_Y * DESKTOP_SCALE)
+CORNER_RADIUS = int(BASE_CORNER_RADIUS * DESKTOP_SCALE)
 
 BG = (10, 12, 16)
 PANEL = (20, 24, 32)
@@ -18,9 +45,15 @@ TEXT = (232, 238, 244)
 MUTED = (140, 150, 165)
 MUTED_DARK = (96, 104, 120)
 
-SMALL_FONT_SIZE = 16
-MEDIUM_FONT_SIZE = 20
-LARGE_FONT_SIZE = 34
+SMALL_FONT_SIZE = int(BASE_SMALL_FONT_SIZE * DESKTOP_SCALE)
+MEDIUM_FONT_SIZE = int(BASE_MEDIUM_FONT_SIZE * DESKTOP_SCALE)
+LARGE_FONT_SIZE = int(BASE_LARGE_FONT_SIZE * DESKTOP_SCALE)
+
+# Icon sizes (scaled for desktop)
+BASE_ICON_SIZE_SMALL = 18
+BASE_ICON_SIZE_MEDIUM = 20
+ICON_SIZE_SMALL = int(BASE_ICON_SIZE_SMALL * DESKTOP_SCALE)
+ICON_SIZE_MEDIUM = int(BASE_ICON_SIZE_MEDIUM * DESKTOP_SCALE)
 
 _fonts_cache = None
 

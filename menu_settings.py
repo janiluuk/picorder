@@ -82,6 +82,7 @@ PAGE_02 = "02_menu_system.py"
 PAGE_03 = "03_menu_services.py"
 PAGE_04 = "04_menu_stats.py"
 PAGE_05 = "05_menu_library.py"
+PAGE_06 = "06_menu_device_selection.py"
 SCREEN_OFF = "menu_screenoff.py"
 
 # Directory configuration
@@ -1216,7 +1217,7 @@ def main(buttons=None, update_callback=None, touch_handler=None, action_handlers
         
         # Call update callback if provided (for dynamic content like recording status)
         # Only call it occasionally to avoid blocking (every 30 iterations = ~3 seconds)
-        if update_callback and buttons:
+        if update_callback:
             # Use a counter to throttle callback frequency
             if not hasattr(main, '_callback_counter'):
                 main._callback_counter = 0
@@ -1244,8 +1245,8 @@ def main(buttons=None, update_callback=None, touch_handler=None, action_handlers
                     # Process events even on error to keep UI responsive
                     try:
                         pygame.event.pump()
-                    except:
-                        pass
+                    except Exception:
+                        pass  # Ignore pygame errors to keep UI responsive
         
         if buttons:
             pygame.display.update()

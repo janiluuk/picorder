@@ -623,7 +623,7 @@ def _draw_home_content(surface, timer_text, secondary_text, is_recording, auto_e
 
     power_rect = pygame.Rect(*rects["power"])
     primitives.rounded_rect(surface, power_rect, 10, theme.PANEL, outline=theme.OUTLINE, width=2)
-    icons.draw_icon_power(surface, power_rect.centerx, power_rect.centery, 18)
+    icons.draw_icon_power(surface, power_rect.centerx, power_rect.centery, theme.ICON_SIZE_SMALL)
 
     record_rect = pygame.Rect(*rects["record"])
     record_center = record_rect.center
@@ -635,7 +635,7 @@ def _draw_home_content(surface, timer_text, secondary_text, is_recording, auto_e
     stop_rect = pygame.Rect(*rects["stop"])
     stop_fill = theme.ACCENT if is_recording else theme.PANEL
     primitives.rounded_rect(surface, stop_rect, 8, stop_fill, outline=theme.OUTLINE, width=2)
-    icons.draw_icon_stop(surface, stop_rect.centerx, stop_rect.centery, 18)
+    icons.draw_icon_stop(surface, stop_rect.centerx, stop_rect.centery, theme.ICON_SIZE_SMALL)
 
 
 def _handle_touch(pos):
