@@ -212,7 +212,7 @@ def go_to_page(p):
             'go_to_page',  # Navigation function
             'screen',  # Display surface
             'black', 'white', 'red', 'green', 'tron_light', 'tron_inverse',  # Colors
-            'PAGE_01', 'PAGE_02', 'PAGE_03', 'PAGE_04', 'PAGE_05', 'SCREEN_OFF',  # Page constants
+            'PAGE_01', 'PAGE_02', 'PAGE_03', 'PAGE_04', 'PAGE_05', 'PAGE_06', 'SCREEN_OFF',  # Page constants
             # Recording queue and thread - need to access the actual module's globals
             # These are in 01_menu_run.py's namespace, so we need to import them
         ]
@@ -262,7 +262,9 @@ def go_to_page(p):
         
         # Set current page for on_touch() to know which menu is active
         global _current_page
-        if p == PAGE_05:
+        if p == PAGE_06:
+            _current_page = "device_selection"
+        elif p == PAGE_05:
             _current_page = "library"
         elif p == PAGE_01:
             _current_page = "main"
