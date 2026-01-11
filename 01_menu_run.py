@@ -2,10 +2,12 @@
 from menu_settings import *
 import threading
 import time
+import math
 from queue import Queue
 import queue as queue_module
 import menu_settings as ms
 from recording_state import RecordingStateMachine, RecordingState
+from ui import theme, primitives, icons, nav
 
 ################################################################################
 # Recording menu - main interface
@@ -472,47 +474,173 @@ def auto_record_monitor():
         else:
             time.sleep(FILE_CHECK_INTERVAL)
 
+def _layout_cache():
+    content_y = theme.TOP_BAR_HEIGHT
+    content_h = theme.SCREEN_HEIGHT - theme.TOP_BAR_HEIGHT - theme.NAV_BAR_HEIGHT
+    content_rect = (0, content_y, theme.SCREEN_WIDTH, content_h)
+    auto_rect = (theme.PADDING_X, content_y + 10, 130, 44)
+    screen_rect = (theme.PADDING_X, content_y + 62, 130, 44)
+    record_size = 72
+    record_cx = theme.SCREEN_WIDTH - 70
+    record_cy = content_y + content_h // 2
+    record_rect = (record_cx - record_size // 2, record_cy - record_size // 2, record_size, record_size)
+    stop_rect = (theme.SCREEN_WIDTH - theme.PADDING_X - 44, content_y + content_h - 50, 44, 44)
+    power_rect = (theme.SCREEN_WIDTH - theme.PADDING_X - 44, content_y + 6, 44, 44)
+    wave_rect = (theme.PADDING_X, content_y + 112, 170, 32)
+    return {
+        "content": content_rect,
+        "auto": auto_rect,
+        "screen": screen_rect,
+        "record": record_rect,
+        "stop": stop_rect,
+        "power": power_rect,
+        "wave": wave_rect,
+    }
+
+
+def _point_in_rect(pos, rect):
+    x, y = pos
+    rx, ry, rw, rh = rect
+    return rx <= x <= rx + rw and ry <= y <= ry + rh
+
+
+def _draw_status_bar(surface, title, status_text):
+    import pygame
+
+    bar_rect = pygame.Rect(0, 0, theme.SCREEN_WIDTH, theme.TOP_BAR_HEIGHT)
+    pygame.draw.rect(surface, theme.PANEL, bar_rect)
+    pygame.draw.line(surface, theme.OUTLINE, (0, theme.TOP_BAR_HEIGHT - 1), (theme.SCREEN_WIDTH, theme.TOP_BAR_HEIGHT - 1), 1)
+
+    fonts = theme.get_fonts()
+    title_surface = fonts["medium"].render(title, True, theme.TEXT)
+    surface.blit(title_surface, (theme.PADDING_X, 4))
+
+    status_surface = fonts["small"].render(status_text, True, theme.MUTED)
+    status_x = theme.SCREEN_WIDTH - theme.PADDING_X - status_surface.get_width()
+    status_y = 6
+
+    icon_gap = 6
+    icon_size = 12
+    battery_x = status_x - icon_size - icon_gap
+    storage_x = battery_x - icon_size - icon_gap
+
+    pygame.draw.rect(surface, theme.MUTED, (battery_x, 7, icon_size, 8), 1)
+    pygame.draw.rect(surface, theme.MUTED, (battery_x + icon_size, 9, 2, 4))
+    pygame.draw.rect(surface, theme.MUTED, (storage_x, 7, icon_size, 8), 1)
+    pygame.draw.line(surface, theme.MUTED, (storage_x + 3, 9), (storage_x + icon_size - 3, 9), 1)
+
+    surface.blit(status_surface, (status_x, status_y))
+
+
+def _draw_home_content(surface, timer_text, secondary_text, is_recording, auto_enabled):
+    import pygame
+
+    rects = _layout_cache()
+    content_rect = pygame.Rect(*rects["content"])
+    pygame.draw.rect(surface, theme.BG, content_rect)
+
+    fonts = theme.get_fonts()
+    timer_surface = fonts["large"].render(timer_text, True, theme.TEXT)
+    surface.blit(timer_surface, (theme.PADDING_X, rects["content"][1] + 8))
+
+    secondary_surface = fonts["medium"].render(secondary_text, True, theme.MUTED)
+    surface.blit(secondary_surface, (theme.PADDING_X, rects["content"][1] + 48))
+
+    wave_rect = rects["wave"]
+    wx, wy, ww, wh = wave_rect
+    bar_count = 10
+    bar_gap = 4
+    bar_width = (ww - (bar_count - 1) * bar_gap) // bar_count
+    for i in range(bar_count):
+        height = int(wh * (0.3 + 0.6 * abs(math.sin(time.time() + i))))
+        bar_x = wx + i * (bar_width + bar_gap)
+        bar_y = wy + (wh - height)
+        pygame.draw.rect(surface, theme.MUTED_DARK, (bar_x, bar_y, bar_width, height))
+
+    auto_rect = pygame.Rect(*rects["auto"])
+    auto_color = theme.ACCENT_ALT if auto_enabled else theme.PANEL
+    primitives.rounded_rect(surface, auto_rect, 12, auto_color, outline=theme.OUTLINE, width=2)
+    auto_label = "AUTO ON" if auto_enabled else "AUTO OFF"
+    auto_text = fonts["small"].render(auto_label, True, theme.TEXT)
+    surface.blit(auto_text, (auto_rect.x + 10, auto_rect.y + 12))
+
+    screen_rect = pygame.Rect(*rects["screen"])
+    primitives.rounded_rect(surface, screen_rect, 12, theme.PANEL, outline=theme.OUTLINE, width=2)
+    screen_label = f"SCREEN {SCREEN_TIMEOUT}s"
+    screen_text = fonts["small"].render(screen_label, True, theme.TEXT)
+    surface.blit(screen_text, (screen_rect.x + 10, screen_rect.y + 12))
+
+    power_rect = pygame.Rect(*rects["power"])
+    primitives.rounded_rect(surface, power_rect, 10, theme.PANEL, outline=theme.OUTLINE, width=2)
+    icons.draw_icon_power(surface, power_rect.centerx, power_rect.centery, 18)
+
+    record_rect = pygame.Rect(*rects["record"])
+    record_center = record_rect.center
+    icons.draw_icon_record(surface, record_center[0], record_center[1], record_rect.width, active=is_recording)
+    if is_recording:
+        stop_text = fonts["small"].render("STOP", True, theme.TEXT)
+        surface.blit(stop_text, (record_center[0] - stop_text.get_width() // 2, record_center[1] - stop_text.get_height() // 2))
+
+    stop_rect = pygame.Rect(*rects["stop"])
+    stop_fill = theme.ACCENT if is_recording else theme.PANEL
+    primitives.rounded_rect(surface, stop_rect, 8, stop_fill, outline=theme.OUTLINE, width=2)
+    icons.draw_icon_stop(surface, stop_rect.centerx, stop_rect.centery, 18)
+
+
+def _handle_touch(pos):
+    nav_tab = nav.nav_hit_test(pos[0], pos[1])
+    if nav_tab:
+        return f"nav_{nav_tab}"
+
+    rects = _layout_cache()
+    if _point_in_rect(pos, rects["record"]):
+        return "record"
+    if _point_in_rect(pos, rects["auto"]):
+        return "auto"
+    if _point_in_rect(pos, rects["screen"]):
+        return "screen"
+    if _point_in_rect(pos, rects["stop"]):
+        return "stop"
+    if _point_in_rect(pos, rects["power"]):
+        return "power"
+    return None
+
+
+def _stop_any_recording():
+    try:
+        _recording_queue.put_nowait(("stop", None, None))
+    except (queue_module.Full, AttributeError, TypeError) as e:
+        if isinstance(e, queue_module.Full):
+            logger.warning("Stop queue full - dropping stop operation")
+        else:
+            try:
+                _recording_queue.put(("stop", None, None), timeout=0.01)
+            except Exception as e2:
+                logger.error(f"Failed to queue stop operation: {e2}")
+
 def update_display():
     """Update display with current recording status"""
-    global screen, names, auto_record_enabled
-    
-    # Quick return if screen not initialized
+    global screen, auto_record_enabled
+
     if 'screen' not in globals() or screen is None:
         return
-    
-    # Try to make this as lightweight as possible to avoid blocking
-    # If anything takes too long, we'll skip it
-    
-    # Get current device configuration with validation
-    # Use try-except to prevent blocking on validation errors
-    # Skip validation entirely to avoid blocking - just use config values
-    # Use cached config if available to avoid file I/O on every update
+
     try:
-        # MEDIUM PRIORITY FIX: Code duplication (#12) - use helper functions (cache-aware)
         audio_device = get_audio_device()
         auto_record_enabled = get_auto_record_enabled()
-        # Don't validate device here - it blocks! Just assume it might be valid
-        # Validation can happen in background or be skipped for display purposes
-        device_valid = bool(audio_device)  # Just check if device is configured, don't validate
+        device_valid = bool(audio_device)
     except Exception as e:
-        # On error, use defaults quickly without retrying file I/O
         logger.debug(f"Error getting device config in update_display: {e}")
         audio_device = ""
         auto_record_enabled = False
         device_valid = False
-    
-    # Don't stop recordings here - it blocks! Just update the display
-    # Recording management should happen in response to user actions, not in display updates
-    
-    # SIMPLIFIED: Get recording state - just use actual state, no optimistic state
-    # This eliminates lock contention and complexity - just get state and display it
+
     display_is_recording = False
     display_mode = None
     display_start_time = None
-    
+
     try:
         import menu_settings as ms
-        # Get actual recording state (non-blocking)
         state = ms._recording_manager.get_recording_state(blocking=False)
         if state:
             display_is_recording = state['is_recording']
@@ -520,93 +648,35 @@ def update_display():
             display_start_time = state['start_time']
     except Exception as e:
         logger.debug(f"Error getting recording state: {e}")
-        # Default to not recording on error
-    
-    # Calculate status based on display state
+
+    timer_text = "--:--"
     if display_is_recording and display_start_time:
         duration = int(time.time() - display_start_time)
-        minutes = duration // 60
+        hours = duration // 3600
+        minutes = (duration % 3600) // 60
         seconds = duration % 60
-        mode_str = "Auto" if display_mode == "auto" else "Manual"
-        status = f"● {mode_str}: {minutes:02d}:{seconds:02d}"
-    elif display_is_recording:
-        status = "● Recording"
-    else:
-        status = "Ready"
-    audio_level = 0.0
-    show_meter = False
-    # Use display_is_recording instead of is_currently_recording to match the displayed UI state
-    # This ensures the meter appears when optimistic updates show "Recording" even if actual recording hasn't started yet
-    if device_valid and display_is_recording:
-        try:
-            # Skip audio level check to avoid blocking - just show meter at 0
-            # Audio level can be checked less frequently or in background
-            audio_level = 0.0  # Don't check audio level - it blocks!
-            show_meter = True
-        except (AttributeError, OSError) as e:
-            logger.debug(f"Error getting audio level: {e}")
-            pass  # If getting audio level fails, just don't show meter
-    
-    # Update names with current status
-    if device_valid:
-        auto_text = "Auto"
-    else:
-        auto_text = "Auto (No Device)"
-    
-    names[0] = status
-    names[1] = auto_text
-    # Use display state for button text (includes optimistic updates for immediate feedback)
-    if display_is_recording:
-        if display_mode == "manual":
-            names[2] = "Stop"
+        if hours > 0:
+            timer_text = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
         else:
-            names[2] = "Stop"  # Auto recording can also be stopped
-    elif device_valid:
-        names[2] = "Record"
-    else:
-        names[2] = "Record (Disabled)"
-    names[3] = "Settings"  # Button 3
-    names[4] = "Library"   # Button 4
-    names[5] = "Screen Off"  # Button 5
-    
-    # Determine button colors for active states
-    button_colors = {}
-    # Auto button (button 1) should be green when enabled
-    if auto_record_enabled and device_valid:
-        button_colors[1] = green  # Green background when auto-record is enabled
-    # Record button (button 2) should be red when recording (use display state)
-    if display_is_recording:
-        button_colors[2] = red  # Red background when recording
-    
-    # Redraw screen - wrap in try-except to prevent blocking
+            timer_text = f"{minutes:02d}:{seconds:02d}"
+
+    mode_label = "Auto" if auto_record_enabled else "Manual"
+    state_label = "Recording" if display_is_recording else "Ready"
+    secondary_text = f"{mode_label} • {state_label}"
+
+    status_text = "MIC 48k" if device_valid else "No Mic"
+
     import pygame
     try:
-        # Process events before redraw to keep UI responsive
         pygame.event.pump()
-        
-        # Note: Property getters will block if lock is held, but they should be quick
-        # The lock is only held briefly for reading state, so this should be fast
-        
-        # Redraw screen
-        screen.fill(black)
-        draw_screen_border(screen)
-        # Draw: label1 (status), buttons for Auto/Record (b12), Settings/Library (b34), Screen Off (b56)
-        # b12=True draws buttons at positions 1 and 2 (Auto toggle and Record/Stop)
-        # b34=True draws buttons at positions 3 and 4 (Settings and Library)
-        # b56=True draws buttons at positions 5 and 6 (Screen Off and empty)
-        populate_screen(names, screen, b12=True, b34=True, b56=True, label1=True, label2=False, label3=False, show_audio_meter=show_meter, audio_level=audio_level, button_colors=button_colors)
-        
-        # Process events during redraw to keep UI responsive
-        pygame.event.pump()
-        
-        # Ensure display is updated (non-blocking)
+        screen.fill(theme.BG)
+        _draw_status_bar(screen, "Recorder", status_text)
+        _draw_home_content(screen, timer_text, secondary_text, display_is_recording, auto_record_enabled)
+        nav.draw_nav(screen, "home")
         pygame.display.update()
-        
-        # Process events after update to keep UI responsive
         pygame.event.pump()
     except Exception as e:
         logger.debug(f"Error in update_display: {e}")
-        # Don't let display update errors break the callback
         try:
             pygame.event.pump()
         except (AttributeError, pygame.error) as e:
@@ -647,50 +717,25 @@ try:
         logger.debug(f"Error getting initial recording state: {e}")
         status = "Ready"  # Default status if we can't get state
     
-    names = [status, "Auto", "Record", "Settings", "Library", "Screen Off", ""]
     print(f"Initial status: {status}", flush=True)
-    
-    # Draw initial screen without validation (fast)
-    # First, make sure screen is filled (init() already does this, but be safe)
-    print("Drawing screen...", flush=True)
-    screen.fill(black)
-    draw_screen_border(screen)
-    
-    # Determine button colors based on current state
-    button_colors = {}
-    try:
-        state = ms._recording_manager.get_recording_state(blocking=False)
-        if state and state['is_recording']:
-            button_colors[2] = red  # Red background when recording
-        # MEDIUM PRIORITY FIX: Code duplication (#12) - use helper functions
-        auto_record_enabled = get_auto_record_enabled()
-        audio_device = get_audio_device()
-        if auto_record_enabled and audio_device:
-            button_colors[1] = green  # Green background when auto-record is enabled
-    except (AttributeError, OSError, KeyError) as e:
-        logger.debug(f"Error getting initial state for button colors: {e}")
-        pass  # If we can't get state, just don't set colors
-    
-    # Make sure we draw everything: label1 (status), buttons for Auto/Record (b12), Settings and Screen Off (b34)
-    print("Populating screen...", flush=True)
-    populate_screen(names, screen, b12=True, b34=True, b56=True, label1=True, label2=False, label3=False, button_colors=button_colors)
-    
-    # Force display update multiple times to ensure it's visible
-    print("Updating display...", flush=True)
-    pygame.display.flip()
-    for _ in range(10):
-        pygame.event.pump()
-        pygame.display.update()
-    
-    # Update activity again after drawing to ensure screen doesn't timeout
-    update_activity()
-    
-    pygame.time.wait(500)  # Give time for window to render
+    update_display()
+
+    pygame.time.wait(300)
     print("Starting main loop...", flush=True)
-    
-    # Start main loop with lightweight callback
-    # Callback updates display but is throttled to prevent blocking
-    main([_1, _2, _3, _4, _5, _6], update_callback=update_display)
+
+    action_handlers = {
+        "nav_home": lambda: None,
+        "nav_library": _4,
+        "nav_stats": lambda: go_to_page(PAGE_04),
+        "nav_settings": _3,
+        "record": _2,
+        "auto": _1,
+        "screen": _5,
+        "power": _5,
+        "stop": _stop_any_recording,
+    }
+
+    main(update_callback=update_display, touch_handler=_handle_touch, action_handlers=action_handlers)
 except (RuntimeError, Exception) as e:
     import sys
     from menu_settings import IS_RASPBERRY_PI
