@@ -286,7 +286,7 @@ class RecordingManager:
                                 recording_process.stderr.close()
                         except (AttributeError, OSError):
                             pass  # Handles already closed
-                    except (AttributeError, ProcessLookupError) as e:
+                    except (AttributeError, ProcessLookupError, OSError) as e:
                         logger.debug(f"Error cleaning up failed process: {e}")
                     
                     # Only now do we try to kill zombie processes (lazy cleanup)
@@ -357,7 +357,7 @@ class RecordingManager:
                                 recording_process.stderr.close()
                         except (AttributeError, OSError):
                             pass
-                    except (AttributeError, ProcessLookupError) as e:
+                    except (AttributeError, ProcessLookupError, OSError) as e:
                         logger.debug(f"Error cleaning up failed process: {e}")
                     # Clear the starting flag on failure
                     with self._lock:
