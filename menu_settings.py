@@ -1216,7 +1216,7 @@ def main(buttons=None, update_callback=None, touch_handler=None, action_handlers
         
         # Call update callback if provided (for dynamic content like recording status)
         # Only call it occasionally to avoid blocking (every 30 iterations = ~3 seconds)
-        if update_callback and buttons:
+        if update_callback:
             # Use a counter to throttle callback frequency
             if not hasattr(main, '_callback_counter'):
                 main._callback_counter = 0

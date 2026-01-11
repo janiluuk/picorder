@@ -12,6 +12,7 @@ from ui import theme, primitives, icons, nav
 show_system_info = False
 
 
+
 def _1():
     # Select audio device (button 1)
     global current_device_index, config, audio_device, audio_devices
@@ -86,6 +87,7 @@ def _3():
         go_to_page(PAGE_01)
 
 
+
 def _4():
     # Back to main menu (button 4 - also back)
     go_to_page(PAGE_01)
@@ -128,9 +130,13 @@ def _draw_status_bar(surface, title, status_text):
     pygame.draw.line(surface, theme.OUTLINE, (0, theme.TOP_BAR_HEIGHT - 1), (theme.SCREEN_WIDTH, theme.TOP_BAR_HEIGHT - 1), 1)
 
     fonts = theme.get_fonts()
-    title_surface = fonts["medium"].render(title, True, theme.TEXT)
+    reserved_right = 96
+    max_title_width = theme.SCREEN_WIDTH - (theme.PADDING_X * 2) - reserved_right
+    title_text = primitives.elide_text(title, max_title_width, fonts["medium"])
+    title_surface = fonts["medium"].render(title_text, True, theme.TEXT)
     surface.blit(title_surface, (theme.PADDING_X, 4))
 
+    status_text = primitives.elide_text(status_text, reserved_right, fonts["small"])
     status_surface = fonts["small"].render(status_text, True, theme.MUTED)
     status_x = theme.SCREEN_WIDTH - theme.PADDING_X - status_surface.get_width()
     surface.blit(status_surface, (status_x, 6))

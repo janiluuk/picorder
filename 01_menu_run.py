@@ -512,9 +512,13 @@ def _draw_status_bar(surface, title, status_text):
     pygame.draw.line(surface, theme.OUTLINE, (0, theme.TOP_BAR_HEIGHT - 1), (theme.SCREEN_WIDTH, theme.TOP_BAR_HEIGHT - 1), 1)
 
     fonts = theme.get_fonts()
-    title_surface = fonts["medium"].render(title, True, theme.TEXT)
+    reserved_right = 96
+    max_title_width = theme.SCREEN_WIDTH - (theme.PADDING_X * 2) - reserved_right
+    title_text = primitives.elide_text(title, max_title_width, fonts["medium"])
+    title_surface = fonts["medium"].render(title_text, True, theme.TEXT)
     surface.blit(title_surface, (theme.PADDING_X, 4))
 
+    status_text = primitives.elide_text(status_text, reserved_right, fonts["small"])
     status_surface = fonts["small"].render(status_text, True, theme.MUTED)
     status_x = theme.SCREEN_WIDTH - theme.PADDING_X - status_surface.get_width()
     status_y = 6
@@ -540,8 +544,18 @@ def _draw_home_content(surface, timer_text, secondary_text, is_recording, auto_e
     pygame.draw.rect(surface, theme.BG, content_rect)
 
     fonts = theme.get_fonts()
-    timer_surface = fonts["large"].render(timer_text, True, theme.TEXT)
+    timer_color = theme.ACCENT if is_recording else theme.TEXT
+    timer_surface = fonts["large"].render(timer_text, True, timer_color)
     surface.blit(timer_surface, (theme.PADDING_X, rects["content"][1] + 8))
+
+    if is_recording:
+        badge_rect = pygame.Rect(theme.SCREEN_WIDTH - 92, rects["content"][1] + 8, 64, 24)
+        primitives.rounded_rect(surface, badge_rect, 10, theme.ACCENT, outline=theme.OUTLINE, width=2)
+        badge_text = fonts["small"].render("REC", True, theme.TEXT)
+        surface.blit(
+            badge_text,
+            (badge_rect.centerx - badge_text.get_width() // 2, badge_rect.centery - badge_text.get_height() // 2),
+        )
 
     secondary_surface = fonts["medium"].render(secondary_text, True, theme.MUTED)
     surface.blit(secondary_surface, (theme.PADDING_X, rects["content"][1] + 48))
