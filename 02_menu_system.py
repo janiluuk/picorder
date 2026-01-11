@@ -5,23 +5,12 @@ from ui import theme, primitives, icons, nav
 ################################################################################
 # Settings menu
 
-config = load_config()
-audio_devices = get_audio_devices()
-current_device_index = 0
+# Settings page - no need to track device index here anymore
+# Device selection is handled in separate page (PAGE_06)
 
-# Find current device in list, or default to "None" if not found
-current_device = config.get("audio_device", "")
-for i, (dev, name) in enumerate(audio_devices):
-    if dev == current_device:
-        current_device_index = i
-        break
-else:
-    # Device not found, check if it's valid
-    if not is_audio_device_valid(current_device):
-        # Invalid device, set to "None"
-        current_device_index = 0
-        config["audio_device"] = ""
-        save_config(config)
+# System info display mode
+show_system_info = False
+
 
 
 def _1():
@@ -87,8 +76,16 @@ def _2():
 
 
 def _3():
-    # Back to main menu (button 3)
-    go_to_page(PAGE_01)
+    # Back to main menu (button 3) or toggle system view
+    global show_system_info
+    if show_system_info:
+        # If showing system info, go back to normal view
+        show_system_info = False
+        update_display()
+    else:
+        # Otherwise, go back to main menu
+        go_to_page(PAGE_01)
+
 
 
 def _4():
