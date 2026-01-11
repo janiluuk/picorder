@@ -20,7 +20,7 @@ sys.modules['pygame.draw'] = MagicMock()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import menu_settings
-from ui import nav
+from ui import nav, theme
 
 
 class TestMenuSettings(unittest.TestCase):
@@ -185,11 +185,15 @@ class TestMenuSettings(unittest.TestCase):
 
     def test_nav_hit_test(self):
         """Test nav_hit_test returns the correct tab"""
-        # Nav bar starts near bottom of 320x240 screen
-        self.assertEqual(nav.nav_hit_test(40, 220), "home")
-        self.assertEqual(nav.nav_hit_test(120, 220), "library")
-        self.assertEqual(nav.nav_hit_test(200, 220), "stats")
-        self.assertEqual(nav.nav_hit_test(280, 220), "settings")
+        # Calculate y coordinate within nav bar (scaled for current environment)
+        nav_y = theme.SCREEN_HEIGHT - theme.NAV_BAR_HEIGHT + 10
+        button_width = theme.SCREEN_WIDTH // 4
+        
+        # Test each button at its center x position
+        self.assertEqual(nav.nav_hit_test(button_width // 2, nav_y), "home")
+        self.assertEqual(nav.nav_hit_test(button_width + button_width // 2, nav_y), "library")
+        self.assertEqual(nav.nav_hit_test(2 * button_width + button_width // 2, nav_y), "stats")
+        self.assertEqual(nav.nav_hit_test(3 * button_width + button_width // 2, nav_y), "settings")
         self.assertIsNone(nav.nav_hit_test(10, 10))
 
     @patch('menu_settings.Popen')
