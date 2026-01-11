@@ -186,8 +186,10 @@ class TestMenuSettings(unittest.TestCase):
     def test_nav_hit_test(self):
         """Test nav_hit_test returns the correct tab"""
         # Calculate y coordinate within nav bar (scaled for current environment)
+        # Use a small offset (10px) from the top of the nav bar to ensure we're within it
         nav_y = theme.SCREEN_HEIGHT - theme.NAV_BAR_HEIGHT + 10
-        button_width = theme.SCREEN_WIDTH // 4
+        button_count = len(nav.NAV_TABS)
+        button_width = theme.SCREEN_WIDTH // button_count
         
         # Test each button at its center x position
         self.assertEqual(nav.nav_hit_test(button_width // 2, nav_y), "home")
