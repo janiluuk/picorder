@@ -267,10 +267,10 @@ class RecordingManager:
                     logger.warning(f"Device busy, attempting cleanup and retry...")
                     # CRITICAL FIX: Clean up failed process with specific exception handling
                     # Use shorter timeout to reduce blocking
+                    try:
+                        recording_process.terminate()
                         try:
-                            recording_process.terminate()
-                            try:
-                                recording_process.wait(timeout=PROCESS_POLL_TIMEOUT)
+                            recording_process.wait(timeout=PROCESS_POLL_TIMEOUT)
                         except (TimeoutExpired, AttributeError, ProcessLookupError):
                             # Process didn't terminate quickly - kill it
                             try:
