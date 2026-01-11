@@ -5,6 +5,9 @@ import threading
 import subprocess
 from subprocess import Popen, PIPE, TimeoutExpired
 from pathlib import Path
+from datetime import datetime
+import re
+from ui import theme, primitives, icons, nav
 
 ################################################################################
 # Library menu - Browse and manage recordings
@@ -79,6 +82,89 @@ import threading
 playback_process = None
 is_playing = False
 _playback_lock = threading.Lock()
+_last_touch_pos = None
+
+ROW_HEIGHT = 48
+CONTROL_BUTTON_SIZE = 44
+CONTROL_BUTTON_GAP = 6
+
+
+def _layout_cache():
+    content_y = theme.TOP_BAR_HEIGHT
+    content_h = theme.SCREEN_HEIGHT - theme.TOP_BAR_HEIGHT - theme.NAV_BAR_HEIGHT
+    content_rect = (0, content_y, theme.SCREEN_WIDTH, content_h)
+    list_rect = (
+        theme.PADDING_X,
+        content_y + 6,
+        theme.SCREEN_WIDTH - (theme.PADDING_X * 2) - (CONTROL_BUTTON_SIZE + theme.PADDING_X),
+        content_h - 12,
+    )
+    control_x = theme.SCREEN_WIDTH - theme.PADDING_X - CONTROL_BUTTON_SIZE
+    total_control_height = (CONTROL_BUTTON_SIZE * 3) + (CONTROL_BUTTON_GAP * 2)
+    start_y = content_y + (content_h - total_control_height) // 2
+    up_rect = (control_x, start_y, CONTROL_BUTTON_SIZE, CONTROL_BUTTON_SIZE)
+    delete_rect = (control_x, start_y + CONTROL_BUTTON_SIZE + CONTROL_BUTTON_GAP, CONTROL_BUTTON_SIZE, CONTROL_BUTTON_SIZE)
+    down_rect = (control_x, start_y + (CONTROL_BUTTON_SIZE + CONTROL_BUTTON_GAP) * 2, CONTROL_BUTTON_SIZE, CONTROL_BUTTON_SIZE)
+    return {
+        "content": content_rect,
+        "list": list_rect,
+        "up": up_rect,
+        "delete": delete_rect,
+        "down": down_rect,
+    }
+
+
+def _point_in_rect(pos, rect):
+    x, y = pos
+    rx, ry, rw, rh = rect
+    return rx <= x <= rx + rw and ry <= y <= ry + rh
+
+
+def _draw_status_bar(surface, title, status_text):
+    import pygame
+
+    bar_rect = pygame.Rect(0, 0, theme.SCREEN_WIDTH, theme.TOP_BAR_HEIGHT)
+    pygame.draw.rect(surface, theme.PANEL, bar_rect)
+    pygame.draw.line(surface, theme.OUTLINE, (0, theme.TOP_BAR_HEIGHT - 1), (theme.SCREEN_WIDTH, theme.TOP_BAR_HEIGHT - 1), 1)
+
+    fonts = theme.get_fonts()
+    reserved_right = 96
+    max_title_width = theme.SCREEN_WIDTH - (theme.PADDING_X * 2) - reserved_right
+    title_text = primitives.elide_text(title, max_title_width, fonts["medium"])
+    title_surface = fonts["medium"].render(title_text, True, theme.TEXT)
+    surface.blit(title_surface, (theme.PADDING_X, 4))
+
+    status_text = primitives.elide_text(status_text, reserved_right, fonts["small"])
+    status_surface = fonts["small"].render(status_text, True, theme.MUTED)
+    status_x = theme.SCREEN_WIDTH - theme.PADDING_X - status_surface.get_width()
+    surface.blit(status_surface, (status_x, 6))
+
+
+def _parse_duration(name):
+    match = re.search(r"(\\d{2})m(\\d{2})s", name)
+    if match:
+        return f"{match.group(1)}m{match.group(2)}s"
+    return "--m--s"
+
+
+def _handle_touch(pos):
+    global _last_touch_pos
+    nav_tab = nav.nav_hit_test(pos[0], pos[1])
+    if nav_tab:
+        return f"nav_{nav_tab}"
+
+    rects = _layout_cache()
+    if _point_in_rect(pos, rects["up"]):
+        return "up"
+    if _point_in_rect(pos, rects["down"]):
+        return "down"
+    if _point_in_rect(pos, rects["delete"]):
+        return "delete"
+
+    if _point_in_rect(pos, rects["list"]):
+        _last_touch_pos = pos
+        return "row"
+    return None
 
 def _stop_playback_safe():
     """Stop playback safely with lock - ensures proper cleanup"""
@@ -255,21 +341,19 @@ def _6():
 
 def update_display():
     """Update display with current recordings list"""
-    global screen, names, recordings, scroll_offset, selected_index, playback_process, is_playing, _playback_lock
-    
-    # Thread-safe check if playback process is still alive
+    global screen, recordings, scroll_offset, selected_index, playback_process, is_playing, _playback_lock
+
+    import pygame
+
     with _playback_lock:
         currently_playing = is_playing
         current_process = playback_process
-    
+
     if currently_playing and current_process is not None:
         try:
-            # Check if process has finished (non-blocking poll)
             if current_process.poll() is not None:
-                # Process finished - update state thread-safely
                 with _playback_lock:
                     is_playing = False
-                    # Close file handles
                     try:
                         if playback_process.stdout:
                             playback_process.stdout.close()
@@ -279,7 +363,6 @@ def update_display():
                         pass
                     playback_process = None
         except (AttributeError, ProcessLookupError) as e:
-            # Process reference invalid - clear state
             logger.debug(f"Playback process invalid: {e}")
             with _playback_lock:
                 is_playing = False
@@ -289,126 +372,113 @@ def update_display():
             with _playback_lock:
                 is_playing = False
                 playback_process = None
-    
-    # Refresh recordings if empty
+
     if not recordings:
         refresh_recordings()
-    
-    # Prepare display
-    if len(recordings) == 0:
-        names[0] = "Library"
-        names[1] = "No recordings"
-        names[2] = ""
-        names[3] = ""  # Button 3 (not used when no recordings)
-        names[4] = ""  # Button 4 (not used when no recordings)
-        names[5] = "Back"   # Button 5
-        names[6] = "Refresh" # Button 6
-    else:
-        names[0] = f"Library ({len(recordings)})"
-        # Show only 1 recording at a time
-        if scroll_offset < len(recordings):
-            rec = recordings[scroll_offset]
-            # Remove "recording_" prefix from filename for display
-            name = rec['name']
-            if name.startswith("recording_"):
-                name = name[10:]  # Remove "recording_" (10 characters)
-            # Truncate filename if too long (now we have more space since prefix is removed)
-            if len(name) > 30:
-                name = name[:27] + "..."
-            # Format: "filename (size MB)"
-            size_str = f"{rec['size_mb']:.1f}MB"
-            display_text = f"{name} ({size_str})"
-            # Highlight selected item
-            if scroll_offset == selected_index:
-                names[1] = "> " + display_text
-            else:
-                names[1] = display_text
-        else:
-            names[1] = ""
-        
-        names[2] = ""  # Not used (only showing 1 item)
-        
-        # Button 3: Play/Stop based on playback state (use thread-safe value)
-        # Get current state atomically for display
-        with _playback_lock:
-            display_is_playing = is_playing
-        if display_is_playing:
-            names[3] = "Stop"   # Show "Stop" when playing
-        else:
-            names[3] = "Play"   # Show "Play" when not playing
-        
-        names[4] = "Delete" # Button 4
-        names[5] = "Back"   # Button 5
-        names[6] = "Refresh" # Button 6
-    
-    # Redraw screen
-    screen.fill(black)
-    draw_screen_border(screen)
-    
-    # Prepare button colors - make Play/Stop button green when playing (use thread-safe value)
-    button_colors = {}
+
+    fonts = theme.get_fonts()
+    screen.fill(theme.BG)
+    _draw_status_bar(screen, "Library", f"{len(recordings)} files")
+
+    rects = _layout_cache()
+    list_rect = rects["list"]
+    list_x, list_y, list_w, list_h = list_rect
+    visible_rows = max(1, list_h // ROW_HEIGHT)
+
     with _playback_lock:
         display_is_playing = is_playing
-    if display_is_playing:
-        button_colors[3] = green  # Green background when playing
-    
-    # Draw: label1 (title), label2 (recording), buttons for Play/Delete (b34), Back (b56)
-    # Don't use b12 for up/down - we'll draw small custom buttons instead
-    populate_screen(names, screen, b12=False, b34=True, b56=True, label1=True, label2=True, label3=False, button_colors=button_colors)
-    
-    # Draw up/down buttons on the right side - moved up and made bigger
-    import pygame
-    # Larger button size: 60x40 pixels
-    up_button_x = 410
-    up_button_y = 30  # Moved up to near the top
-    down_button_x = 410
-    down_button_y = 75  # Positioned below up button
-    
-    button_width = 60
-    button_height = 40
-    
-    # Dark orange background color (low contrast, dark)
-    dark_orange = (120, 60, 20)  # Dark orange with low brightness
-    dark_orange_border = (160, 80, 30)  # Slightly lighter for border
-    arrow_color = (200, 150, 100)  # Light orange/beige for arrows (good contrast on dark orange)
-    
-    # Draw up button (button 1) with dark orange background
-    up_rect = pygame.Rect(up_button_x, up_button_y, button_width, button_height)
-    pygame.draw.rect(screen, dark_orange, up_rect)
-    pygame.draw.rect(screen, dark_orange_border, up_rect, 2)
-    # Draw up arrow as a triangle shape
-    center_x = up_button_x + button_width // 2
-    center_y = up_button_y + button_height // 2
-    # Draw triangle pointing up
-    up_points = [
-        (center_x, center_y - 12),  # Top point
-        (center_x - 15, center_y + 8),  # Bottom left
-        (center_x + 15, center_y + 8)   # Bottom right
-    ]
-    pygame.draw.polygon(screen, arrow_color, up_points)
-    pygame.draw.polygon(screen, dark_orange_border, up_points, 1)
-    
-    # Draw down button (button 2) with dark orange background
-    down_rect = pygame.Rect(down_button_x, down_button_y, button_width, button_height)
-    pygame.draw.rect(screen, dark_orange, down_rect)
-    pygame.draw.rect(screen, dark_orange_border, down_rect, 2)
-    # Draw down arrow as a triangle shape
-    center_x = down_button_x + button_width // 2
-    center_y = down_button_y + button_height // 2
-    # Draw triangle pointing down
-    down_points = [
-        (center_x, center_y + 12),  # Bottom point
-        (center_x - 15, center_y - 8),  # Top left
-        (center_x + 15, center_y - 8)   # Top right
-    ]
-    pygame.draw.polygon(screen, arrow_color, down_points)
-    pygame.draw.polygon(screen, dark_orange_border, down_points, 1)
+
+    for row in range(visible_rows):
+        idx = scroll_offset + row
+        row_y = list_y + row * ROW_HEIGHT
+        row_rect = (list_x, row_y, list_w, ROW_HEIGHT - 4)
+
+        if idx >= len(recordings):
+            break
+
+        rec = recordings[idx]
+        name = rec["name"]
+        if name.startswith("recording_"):
+            name = name[10:]
+        duration = _parse_duration(name)
+        timestamp = datetime.fromtimestamp(rec["mod_time"]).strftime("%m/%d %H:%M")
+
+        is_selected = idx == selected_index
+        row_color = theme.PANEL if is_selected else theme.BG
+        primitives.rounded_rect(screen, row_rect, 8, row_color, outline=theme.OUTLINE, width=1)
+
+        icon_cx = list_x + 18
+        icon_cy = row_y + (ROW_HEIGHT // 2)
+        if display_is_playing and is_selected:
+            icons.draw_icon_stop(screen, icon_cx, icon_cy, 18)
+        else:
+            icons.draw_icon_play(screen, icon_cx, icon_cy, 18)
+
+        text_x = list_x + 36
+        date_text = fonts["small"].render(timestamp, True, theme.MUTED)
+        screen.blit(date_text, (text_x, row_y + 6))
+
+        name_text = primitives.elide_text(name, list_w - 80, fonts["small"])
+        file_surface = fonts["small"].render(name_text, True, theme.TEXT)
+        screen.blit(file_surface, (text_x, row_y + 24))
+
+        duration_surface = fonts["small"].render(duration, True, theme.MUTED)
+        duration_x = list_x + list_w - duration_surface.get_width() - 6
+        screen.blit(duration_surface, (duration_x, row_y + 16))
+
+    if len(recordings) == 0:
+        empty_surface = fonts["medium"].render("No recordings", True, theme.MUTED)
+        empty_x = list_x + (list_w - empty_surface.get_width()) // 2
+        empty_y = list_y + (list_h - empty_surface.get_height()) // 2
+        screen.blit(empty_surface, (empty_x, empty_y))
+
+    for rect_key, icon_draw in [(rects["up"], "up"), (rects["delete"], "delete"), (rects["down"], "down")]:
+        rx, ry, rw, rh = rect_key
+        primitives.rounded_rect(screen, (rx, ry, rw, rh), 8, theme.PANEL, outline=theme.OUTLINE, width=2)
+        if icon_draw == "up":
+            pygame.draw.polygon(screen, theme.TEXT, [(rx + rw // 2, ry + 10), (rx + 10, ry + rh - 10), (rx + rw - 10, ry + rh - 10)])
+        elif icon_draw == "down":
+            pygame.draw.polygon(screen, theme.TEXT, [(rx + 10, ry + 10), (rx + rw - 10, ry + 10), (rx + rw // 2, ry + rh - 10)])
+        else:
+            icons.draw_icon_trash(screen, rx + rw // 2, ry + rh // 2, 20)
+
+    nav.draw_nav(screen, "library")
+    pygame.display.update()
 
 # Initialize
 refresh_recordings()
-names = ["Library", "", "", "Play", "Delete", "Back", "Refresh"]
 
 screen = init()
 update_display()
-main([_1, _2, _3, _4, _5, _6], update_callback=update_display)
 
+def _row_action():
+    global selected_index, scroll_offset
+    rects = _layout_cache()
+    list_x, list_y, list_w, list_h = rects["list"]
+    if _last_touch_pos is None:
+        return
+    _, y = _last_touch_pos
+    row = int((y - list_y) // ROW_HEIGHT)
+    visible_rows = max(1, list_h // ROW_HEIGHT)
+    if row < 0 or row >= visible_rows:
+        return
+    idx = scroll_offset + row
+    if idx >= len(recordings):
+        return
+    selected_index = idx
+    _stop_playback_safe()
+    _3()
+
+
+action_handlers = {
+    "nav_home": _5,
+    "nav_library": lambda: None,
+    "nav_stats": lambda: go_to_page(PAGE_04),
+    "nav_settings": lambda: go_to_page(PAGE_02),
+    "up": _1,
+    "down": _2,
+    "delete": _4,
+    "row": _row_action,
+}
+
+main(update_callback=update_display, touch_handler=_handle_touch, action_handlers=action_handlers)

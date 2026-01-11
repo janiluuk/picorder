@@ -20,6 +20,7 @@ sys.modules['pygame.draw'] = MagicMock()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import menu_settings
+from ui import nav
 
 
 class TestMenuSettings(unittest.TestCase):
@@ -182,56 +183,14 @@ class TestMenuSettings(unittest.TestCase):
         menu_settings.button(6, handler1, handler2, handler3, handler4, handler5, handler6)
         self.assertEqual(call_order, [6])
 
-    @patch('menu_settings.pygame.mouse.get_pos')
-    def test_on_touch_button_1(self, mock_get_pos):
-        """Test on_touch detects button 1"""
-        mock_get_pos.return_value = (100, 130)
-        result = menu_settings.on_touch()
-        self.assertEqual(result, 1)
-
-    @patch('menu_settings.pygame.mouse.get_pos')
-    def test_on_touch_button_2(self, mock_get_pos):
-        """Test on_touch detects button 2"""
-        mock_get_pos.return_value = (350, 130)
-        result = menu_settings.on_touch()
-        self.assertEqual(result, 2)
-
-    @patch('menu_settings.pygame.mouse.get_pos')
-    def test_on_touch_button_3(self, mock_get_pos):
-        """Test on_touch detects button 3"""
-        mock_get_pos.return_value = (100, 200)
-        result = menu_settings.on_touch()
-        self.assertEqual(result, 3)
-
-    @patch('menu_settings.pygame.mouse.get_pos')
-    def test_on_touch_button_4(self, mock_get_pos):
-        """Test on_touch detects button 4"""
-        mock_get_pos.return_value = (350, 200)
-        result = menu_settings.on_touch()
-        self.assertEqual(result, 4)
-
-    @patch('menu_settings.pygame.mouse.get_pos')
-    def test_on_touch_button_5(self, mock_get_pos):
-        """Test on_touch detects button 5"""
-        mock_get_pos.return_value = (100, 280)
-        result = menu_settings.on_touch()
-        self.assertEqual(result, 5)
-
-    @patch('menu_settings.pygame.mouse.get_pos')
-    def test_on_touch_button_6(self, mock_get_pos):
-        """Test on_touch detects button 6"""
-        mock_get_pos.return_value = (350, 280)
-        result = menu_settings.on_touch()
-        self.assertEqual(result, 6)
-
-    @patch('menu_settings.pygame.mouse.get_pos')
-    def test_on_touch_no_button(self, mock_get_pos):
-        """Test on_touch returns None for positions outside buttons"""
-        mock_get_pos.return_value = (10, 10)
-        result = menu_settings.on_touch()
-        # on_touch doesn't explicitly return None, but doesn't match any button
-        # The function will return None implicitly if no conditions match
-        self.assertIsNone(result)
+    def test_nav_hit_test(self):
+        """Test nav_hit_test returns the correct tab"""
+        # Nav bar starts near bottom of 320x240 screen
+        self.assertEqual(nav.nav_hit_test(40, 220), "home")
+        self.assertEqual(nav.nav_hit_test(120, 220), "library")
+        self.assertEqual(nav.nav_hit_test(200, 220), "stats")
+        self.assertEqual(nav.nav_hit_test(280, 220), "settings")
+        self.assertIsNone(nav.nav_hit_test(10, 10))
 
     @patch('menu_settings.Popen')
     def test_run_cmd(self, mock_popen):
@@ -275,4 +234,3 @@ class TestMenuSettings(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-

@@ -81,51 +81,71 @@ To run the menu on a Linux desktop system:
 
 ## Usage ##
 
-### Main Menu (Recording)
+### Navigation Overview
 
-The main menu is displayed when you start the application. The screen shows:
+- **Top Status Bar**: Screen title on the left, status indicators on the right.
+- **Bottom Navigation**: Persistent tabs with icons and short labels:
+  - **REC** (Home/Recorder)
+  - **LIB** (Library)
+  - **STAT** (Stats)
+  - **SET** (Settings)
 
-- **Top Row**: Current recording status and duration (e.g., "Manual: 05:32" or "Not Recording")
-- **Row 1**: Auto-record status ("Auto: ON" or "Auto: OFF")
-- **Row 2**: Record button ("Record" or "Stop" depending on state)
+Tap the bottom nav at any time to switch screens.
 
-**Button Functions:**
-1. **Button 1**: Toggle auto-record ON/OFF (only works if valid audio device is selected)
-2. **Button 2**: Start/stop manual recording
-3. **Button 3**: Stop any active recording
-4. **Button 4**: Open Settings menu
-5. **Button 5**: Turn screen off (enters sleep mode)
-6. **Button 6**: (Not used in main menu)
+### Home / Recorder (REC)
+
+The recorder screen is the default view.
+
+- **Timer**: Large recording duration readout.
+- **Mode + State**: “Auto • Recording” or “Manual • Ready”.
+- **Quick Toggles**:
+  - **AUTO ON/OFF** pill toggles auto-record (requires a valid input device).
+  - **SCREEN 30s** pill opens the screen-off view.
+- **Record Button**: Large round button to start/stop manual recording.
+- **Stop Any Recording**: Small stop-square button stops any active recording.
+- **Power Icon**: Shortcut to screen-off mode.
 
 **Auto-Record Mode:**
-- When enabled, the device automatically starts recording when you plug in a 3.5mm audio jack
-- Recording stops automatically when you unplug the jack
-- Auto-record can only be enabled if a valid audio input device is configured
+- When enabled, the device automatically starts recording when you plug in a 3.5mm audio jack.
+- Recording stops automatically when you unplug the jack.
+- Auto-record can only be enabled if a valid audio input device is configured.
 
 **Manual Recording:**
-- Press Button 2 to start recording manually
-- Press Button 2 again (or Button 3) to stop recording
-- Manual recordings are saved with duration in the filename
+- Tap the large record button to start recording manually.
+- Tap it again (or the stop-square button) to stop recording.
 
 ![screenshot2](https://github.com/janiluuk/picorder/blob/main/screenshot2.png)
 
-### Settings Menu
+### Library (LIB)
 
-Access the settings menu by pressing Button 4 from the main menu.
+- Shows the most recent recordings in a compact list (date/time + filename).
+- Tap a row to select and play the recording.
+- Use the **up/down** buttons to move through the list.
+- Use the **trash** button to delete the selected recording.
 
-**Button Functions:**
-1. **Button 1**: Cycle through available audio input devices
-2. **Button 2**: (Not used)
-3. **Button 3**: (Not used)
-4. **Button 4**: (Not used)
-5. **Button 5**: Return to previous page (Main Menu)
-6. **Button 6**: (Not used)
+### Stats (STAT)
+
+Shows a 2x2 grid of tiles for:
+- Battery (placeholder if not available)
+- Storage free space
+- Input device
+- Auto-record status
+
+### Settings (SET)
+
+Settings are presented as a 2x3 icon grid:
+- **AUD**: Cycle audio input device.
+- **AUTO**: Toggle auto-record.
+- **STOR**: Jump to the Library screen.
+- **SYS**: Open system/services screen.
+- **SCR**: Screen-off shortcut.
+- **INFO**: Jump to the Stats screen.
 
 **Selecting Audio Device:**
-- Press Button 1 repeatedly to cycle through available audio input devices
-- "None (Disabled)" means no audio device is selected (recording disabled)
-- The selected device is automatically validated before use
-- If a device becomes unavailable, auto-record is automatically disabled
+- Tap **AUD** repeatedly to cycle through available audio input devices.
+- "None (Disabled)" means no audio device is selected (recording disabled).
+- The selected device is automatically validated before use.
+- If a device becomes unavailable, auto-record is automatically disabled.
 
 ### Screen Timeout
 
