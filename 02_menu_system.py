@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from menu_settings import *
+from ui import theme, primitives, icons, nav
 
 ################################################################################
 # Settings menu
@@ -10,17 +11,68 @@ from menu_settings import *
 # System info display mode
 show_system_info = False
 
+
 def _1():
-    # Navigate to device selection page (button 1)
-    global show_system_info
-    show_system_info = False  # Reset to normal view when navigating away
-    go_to_page(PAGE_06)
+    # Select audio device (button 1)
+    global current_device_index, config, audio_device, audio_devices
+    # Refresh device list in case devices changed
+    audio_devices = get_audio_devices()
+
+    # Ensure we have at least the "None" option
+    if len(audio_devices) == 0:
+        audio_devices = [("", "None (Disabled)")]
+        current_device_index = 0
+
+    # Cycle to next device
+    current_device_index = (current_device_index + 1) % len(audio_devices)
+    audio_device = audio_devices[current_device_index][0]
+    config["audio_device"] = audio_device
+    save_config(config)
+
+    # If "None" selected or device invalid, disable auto-record and stop any recordings
+    # Skip validation to avoid blocking - just check if device is configured
+    if audio_device == "":
+        config["auto_record"] = False
+        save_config(config)
+        # Stop silentjack if running
+        stop_silentjack()
+        # Stop any active recording (thread-safe check)
+        import menu_settings as ms
+        try:
+            if ms._recording_manager.is_recording:
+                stop_recording()
+        except Exception:
+            pass
+
+    # Update display
+    update_display()
+
 
 def _2():
-    # Toggle system info display (button 2)
-    global show_system_info
-    show_system_info = not show_system_info
+    # Toggle auto-record (button 2)
+    global auto_record_enabled, audio_devices, current_device_index
+    config = load_config()
+    audio_device = config.get("audio_device", "")
+
+    # Can't enable auto-record if no device is selected
+    if audio_device == "":
+        # No device, can't enable
+        return
+
+    # Skip validation to avoid blocking - just check if device is configured
+    auto_record_enabled = not config.get("auto_record", False)
+    config["auto_record"] = auto_record_enabled
+    save_config(config)
+
+    # Start/stop silentjack based on new state
+    if auto_record_enabled:
+        # auto_record_monitor will handle starting silentjack
+        pass
+    else:
+        stop_silentjack()
+
     update_display()
+
 
 def _3():
     # Back to main menu (button 3) or toggle system view
@@ -33,9 +85,11 @@ def _3():
         # Otherwise, go back to main menu
         go_to_page(PAGE_01)
 
+
 def _4():
     # Back to main menu (button 4 - also back)
     go_to_page(PAGE_01)
+
 
 def _5():
     # Shutdown (button 5 - not shown in current layout)
@@ -43,82 +97,135 @@ def _5():
     run_cmd("/usr/bin/sudo /sbin/shutdown -h now")
     sys.exit()
 
+
 def _6():
     # Not used
     pass
 
+
+def _grid_layout():
+    content_y = theme.TOP_BAR_HEIGHT
+    content_h = theme.SCREEN_HEIGHT - theme.TOP_BAR_HEIGHT - theme.NAV_BAR_HEIGHT
+    padding = theme.PADDING_X
+    cols = 3
+    rows = 2
+    cell_w = (theme.SCREEN_WIDTH - padding * (cols + 1)) // cols
+    cell_h = (content_h - padding * (rows + 1)) // rows
+    rects = []
+    for row in range(rows):
+        for col in range(cols):
+            x = padding + col * (cell_w + padding)
+            y = content_y + padding + row * (cell_h + padding)
+            rects.append((x, y, cell_w, cell_h))
+    return rects
+
+
+def _draw_status_bar(surface, title, status_text):
+    import pygame
+
+    bar_rect = pygame.Rect(0, 0, theme.SCREEN_WIDTH, theme.TOP_BAR_HEIGHT)
+    pygame.draw.rect(surface, theme.PANEL, bar_rect)
+    pygame.draw.line(surface, theme.OUTLINE, (0, theme.TOP_BAR_HEIGHT - 1), (theme.SCREEN_WIDTH, theme.TOP_BAR_HEIGHT - 1), 1)
+
+    fonts = theme.get_fonts()
+    title_surface = fonts["medium"].render(title, True, theme.TEXT)
+    surface.blit(title_surface, (theme.PADDING_X, 4))
+
+    status_surface = fonts["small"].render(status_text, True, theme.MUTED)
+    status_x = theme.SCREEN_WIDTH - theme.PADDING_X - status_surface.get_width()
+    surface.blit(status_surface, (status_x, 6))
+
+
+def _handle_touch(pos):
+    nav_tab = nav.nav_hit_test(pos[0], pos[1])
+    if nav_tab:
+        return f"nav_{nav_tab}"
+
+    for idx, rect in enumerate(_grid_layout()):
+        x, y, w, h = rect
+        if x <= pos[0] <= x + w and y <= pos[1] <= y + h:
+            return f"cell_{idx}"
+    return None
+
+
 def update_display():
     """Update display with current settings"""
-    global screen, names, show_system_info
-    
-    if show_system_info:
-        # System info view - show IP address and free space
-        ip_address = get_ip()
-        disk_space = get_disk_space()
-        
-        # Format IP address (remove leading space if present, ensure "IP:" prefix)
-        ip_display = ip_address.strip() if ip_address else "Not connected"
-        if ip_display != "Not connected" and not ip_display.startswith("IP:"):
-            ip_display = f"IP: {ip_display}"
-        
-        names[0] = "⚙️ System Info"
-        names[1] = ip_display
-        names[2] = disk_space
-        names[3] = "← Back"
-        names[4] = ""
-        names[5] = ""
-        names[6] = ""
-        
-        button_colors = {}
-        
-        # Redraw screen
-        screen.fill(black)
-        draw_screen_border(screen)
-        # Draw: label1 (title), label2 (IP), label3 (disk space), Back button (b34)
-        populate_screen(names, screen, b12=False, b34=True, b56=False, label1=True, label2=True, label3=True, button_colors=button_colors)
-    else:
-        # Normal settings view
-        # Get current device configuration with validation
-        config, audio_device, auto_record_enabled, device_valid = get_current_device_config()
-        
-        # Get current device name for display
-        audio_devices = get_audio_devices()
-        device_name = "None"
-        for dev_id, dev_name in audio_devices:
-            if dev_id == audio_device:
-                device_name = dev_name
-                break
-        
-        # Truncate device name if too long
-        if len(device_name) > 20:
-            device_name = device_name[:17] + "..."
-        
-        # Get disk space
-        disk_space = get_disk_space()
-        
-        # Use symbols for visual engagement
-        device_symbol = "🎤" if device_valid else "❌"
-        
-        names[0] = "⚙️ Settings"
-        names[1] = f"{device_symbol} Device"
-        names[2] = "💻 System"
-        names[3] = "← Back"
-        names[4] = ""
-        names[5] = ""
-        names[6] = ""
-        
-        # No button colors needed
-        button_colors = {}
-        
-        # Redraw screen
-        screen.fill(black)
-        draw_screen_border(screen)
-        # Draw: label1 (title), buttons for Device and System (b12), Back (b34)
-        populate_screen(names, screen, b12=True, b34=True, b56=False, label1=True, label2=False, label3=False, button_colors=button_colors)
+    global screen, audio_devices, current_device_index
 
-# Initialize names - will be updated in update_display()
-names = ["⚙️ Settings", "🎤 Device", "💻 System", "← Back", "", "", ""]
+    audio_devices = get_audio_devices()
+    if len(audio_devices) == 0:
+        audio_devices = [("", "None (Disabled)")]
+
+    if current_device_index >= len(audio_devices):
+        current_device_index = 0
+
+    device_name = audio_devices[current_device_index][1]
+    if len(device_name) > MAX_DEVICE_NAME_LENGTH:
+        device_name = device_name[:17] + "..."
+
+    config, audio_device, auto_record_enabled, device_valid = get_current_device_config()
+    disk_space = get_disk_space()
+
+    fonts = theme.get_fonts()
+    screen.fill(theme.BG)
+    _draw_status_bar(screen, "Settings", disk_space)
+
+    labels = [
+        ("AUD", device_name),
+        ("AUTO", "ON" if auto_record_enabled and device_valid else "OFF"),
+        ("STOR", disk_space),
+        ("SYS", "Services"),
+        ("SCR", f"{SCREEN_TIMEOUT}s"),
+        ("INFO", "Stats"),
+    ]
+
+    rects = _grid_layout()
+    for idx, rect in enumerate(rects):
+        primitives.rounded_rect(screen, rect, 10, theme.PANEL, outline=theme.OUTLINE, width=2)
+        icon_cx = rect[0] + rect[2] // 2
+        icon_cy = rect[1] + rect[3] // 2 - 8
+
+        if idx == 0:
+            icons.draw_icon_record(screen, icon_cx, icon_cy, 20, active=device_valid)
+        elif idx == 1:
+            icons.draw_icon_chart(screen, icon_cx, icon_cy, 20)
+        elif idx == 2:
+            icons.draw_icon_list(screen, icon_cx, icon_cy, 20)
+        elif idx == 3:
+            icons.draw_icon_gear(screen, icon_cx, icon_cy, 20)
+        elif idx == 4:
+            icons.draw_icon_power(screen, icon_cx, icon_cy, 20)
+        else:
+            icons.draw_icon_chart(screen, icon_cx, icon_cy, 20)
+
+        label, status = labels[idx]
+        label_surface = fonts["small"].render(label, True, theme.TEXT)
+        label_x = rect[0] + (rect[2] - label_surface.get_width()) // 2
+        label_y = rect[1] + rect[3] - label_surface.get_height() - 6
+        screen.blit(label_surface, (label_x, label_y))
+
+        status_surface = fonts["small"].render(status, True, theme.MUTED)
+        status_x = rect[0] + (rect[2] - status_surface.get_width()) // 2
+        screen.blit(status_surface, (status_x, rect[1] + 8))
+
+    nav.draw_nav(screen, "settings")
+    pygame.display.update()
+
 
 screen = init()
 update_display()
-main([_1, _2, _3, _4, _5, _6], update_callback=update_display)
+
+action_handlers = {
+    "nav_home": lambda: go_to_page(PAGE_01),
+    "nav_library": lambda: go_to_page(PAGE_05),
+    "nav_stats": lambda: go_to_page(PAGE_04),
+    "nav_settings": lambda: None,
+    "cell_0": _1,
+    "cell_1": _2,
+    "cell_2": lambda: go_to_page(PAGE_05),
+    "cell_3": lambda: go_to_page(PAGE_03),
+    "cell_4": lambda: go_to_page(SCREEN_OFF),
+    "cell_5": lambda: go_to_page(PAGE_04),
+}
+
+main(update_callback=update_display, touch_handler=_handle_touch, action_handlers=action_handlers)

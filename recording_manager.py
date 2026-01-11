@@ -908,4 +908,3 @@ fi
         except (ValueError, OSError, IOError) as e:
             logger.debug(f"Error checking silentjack recording: {e}")
             return False, None
-
