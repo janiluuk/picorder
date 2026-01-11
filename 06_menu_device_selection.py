@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from menu_settings import *
+from ui import theme
 
 ################################################################################
 # Device Selection menu - Browse and select audio input devices
@@ -190,34 +191,29 @@ def update_display():
     button_width = 60
     button_height = 40
     
-    # Dark orange background color (low contrast, dark)
-    dark_orange = (120, 60, 20)  # Dark orange with low brightness
-    dark_orange_border = (160, 80, 30)  # Slightly lighter for border
-    arrow_color = (200, 150, 100)  # Light orange/beige for arrows (good contrast on dark orange)
-    
-    # Draw up button (button 1) with dark orange background
+    # Draw up button (button 1) with navigation button colors from theme
     up_rect = pygame.Rect(up_button_x, up_button_y, button_width, button_height)
-    pygame.draw.rect(screen, dark_orange, up_rect)
-    pygame.draw.rect(screen, dark_orange_border, up_rect, 2)
+    pygame.draw.rect(screen, theme.BUTTON_NAV_BG, up_rect)
+    pygame.draw.rect(screen, theme.BUTTON_NAV_BORDER, up_rect, 2)
     # Draw up arrow as a triangle shape
     up_arrow_points = [
         (up_button_x + button_width // 2, up_button_y + 10),  # Top point
         (up_button_x + 15, up_button_y + button_height - 10),  # Bottom left
         (up_button_x + button_width - 15, up_button_y + button_height - 10)  # Bottom right
     ]
-    pygame.draw.polygon(screen, arrow_color, up_arrow_points)
+    pygame.draw.polygon(screen, theme.BUTTON_NAV_ARROW, up_arrow_points)
     
-    # Draw down button (button 2) with dark orange background
+    # Draw down button (button 2) with navigation button colors from theme
     down_rect = pygame.Rect(down_button_x, down_button_y, button_width, button_height)
-    pygame.draw.rect(screen, dark_orange, down_rect)
-    pygame.draw.rect(screen, dark_orange_border, down_rect, 2)
+    pygame.draw.rect(screen, theme.BUTTON_NAV_BG, down_rect)
+    pygame.draw.rect(screen, theme.BUTTON_NAV_BORDER, down_rect, 2)
     # Draw down arrow as a triangle shape
     down_arrow_points = [
         (down_button_x + 15, down_button_y + 10),  # Top left
         (down_button_x + button_width - 15, down_button_y + 10),  # Top right
         (down_button_x + button_width // 2, down_button_y + button_height - 10)  # Bottom point
     ]
-    pygame.draw.polygon(screen, arrow_color, down_arrow_points)
+    pygame.draw.polygon(screen, theme.BUTTON_NAV_ARROW, down_arrow_points)
     
     pygame.display.update()
 
