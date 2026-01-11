@@ -182,14 +182,15 @@ def update_display():
     # Draw up/down buttons on the right side - same style as library browser
     import pygame
     # Scale button dimensions with screen size (base values: 60x40 for 320px width screen)
-    button_width = int(60 * (theme.SCREEN_WIDTH / 320))
-    button_height = int(40 * (theme.SCREEN_WIDTH / 320))
+    scale_factor = theme.SCREEN_WIDTH / 320
+    button_width = int(60 * scale_factor)
+    button_height = int(40 * scale_factor)
     
     # Position buttons on right side, scaled appropriately
-    up_button_x = theme.SCREEN_WIDTH - button_width - int(10 * (theme.SCREEN_WIDTH / 320))
-    up_button_y = int(30 * (theme.SCREEN_WIDTH / 320))  # Moved up to near the top
+    up_button_x = theme.SCREEN_WIDTH - button_width - int(10 * scale_factor)
+    up_button_y = int(30 * scale_factor)  # Moved up to near the top
     down_button_x = up_button_x  # Same x position as up button
-    down_button_y = up_button_y + button_height + int(5 * (theme.SCREEN_WIDTH / 320))  # Positioned below up button with gap
+    down_button_y = up_button_y + button_height + int(5 * scale_factor)  # Positioned below up button with gap
     
     # Dark orange background color (low contrast, dark)
     dark_orange = (120, 60, 20)  # Dark orange with low brightness
@@ -197,8 +198,8 @@ def update_display():
     arrow_color = (200, 150, 100)  # Light orange/beige for arrows (good contrast on dark orange)
     
     # Scale arrow padding
-    arrow_padding = int(10 * (theme.SCREEN_WIDTH / 320))
-    arrow_side_padding = int(15 * (theme.SCREEN_WIDTH / 320))
+    arrow_padding = int(10 * scale_factor)
+    arrow_side_padding = int(15 * scale_factor)
     
     # Draw up button (button 1) with dark orange background
     up_rect = pygame.Rect(up_button_x, up_button_y, button_width, button_height)
