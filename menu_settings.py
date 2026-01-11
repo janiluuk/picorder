@@ -10,6 +10,7 @@ import shutil
 import json
 import logging
 from pathlib import Path
+from ui import theme
 
 try:
     import RPi.GPIO as GPIO
@@ -809,11 +810,11 @@ button_pos_4 = (260, 180, 55, 210)
 button_pos_5 = (30, 255, 55, 210)
 button_pos_6 = (260, 255, 55, 210)
 
-size = width, height = 480, 320
+size = width, height = theme.SCREEN_WIDTH, theme.SCREEN_HEIGHT
 
 # Screen drawing constants
-SCREEN_BORDER_OUTER = (0, 0, 479, 319)
-SCREEN_BORDER_INNER = (2, 2, 479-4, 319-4)
+SCREEN_BORDER_OUTER = (0, 0, width - 1, height - 1)
+SCREEN_BORDER_INNER = (2, 2, width - 5, height - 5)
 SCREEN_BORDER_OUTER_WIDTH = 8
 SCREEN_BORDER_INNER_WIDTH = 2
 
@@ -1108,7 +1109,7 @@ def populate_screen(names, screen, service=["","","","","",""], label1=True,
     if show_audio_meter:
         draw_audio_meter(screen, audio_level)
 
-def main(buttons=[], update_callback=None):
+def main(buttons=None, update_callback=None, touch_handler=None, action_handlers=None):
     if buttons:
         [_1, _2, _3, _4, _5, _6] = buttons
         sleep_delay=0.1
@@ -1184,7 +1185,15 @@ def main(buttons=[], update_callback=None):
         for event in pygame.event.get():
             if event.type == pygame.MOUSEBUTTONDOWN:
                 update_activity()
-                if buttons:
+                if touch_handler and action_handlers:
+                    pos = pygame.mouse.get_pos()
+                    action = touch_handler(pos)
+                    if action and action in action_handlers:
+                        action_handlers[action]()
+                        pygame.event.pump()
+                        pygame.display.update()
+                        pygame.event.pump()
+                elif buttons:
                     pos = (pygame.mouse.get_pos() [0], pygame.mouse.get_pos() [1])
                     b = on_touch()
                     if b:
