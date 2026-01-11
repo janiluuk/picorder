@@ -2,7 +2,7 @@
 
 A Raspberry Pi menu system for audio recording with manual and automatic modes, compatible with Waveshare 3.5-inch TFT touch display. Also works on Linux desktop systems using pygame with X11.
 
-![screenshot](https://github.com/janiluuk/picorder/blob/main/screenshot.png)
+![screenshot](https://github.com/janiluuk/picorder/blob/main/img/screenshot_1.png)
 
 ## Hardware Compatibility ##
 
@@ -77,7 +77,7 @@ To run the menu on a Linux desktop system:
 - **Screen Management**: Screen turns off after 30 seconds of inactivity, stays on during recording
 - **Smart File Naming**: Recordings are automatically named with date, time, and duration (e.g., `recording_20240115_143022_05m32s.wav`)
 
-![screenshot](https://github.com/janiluuk/picorder/blob/main/screenshot3.png)
+![screenshot](https://github.com/janiluuk/picorder/blob/main/img/screenshot_2.png)
 
 ## Usage ##
 
@@ -114,7 +114,7 @@ The recorder screen is the default view.
 - Tap the large record button to start recording manually.
 - Tap it again (or the stop-square button) to stop recording.
 
-![screenshot2](https://github.com/janiluuk/picorder/blob/main/screenshot2.png)
+![screenshot2](https://github.com/janiluuk/picorder/blob/main/img/screenshot_3.png)
 
 ### Library (LIB)
 
