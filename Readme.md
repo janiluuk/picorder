@@ -1,4 +1,4 @@
-# Picorder - a Raspberry Pi TFT Audio Recorder
+# Picorder - an Audio Recorder for Raspberry Pi + 3.5" TFT display
 
 A Raspberry Pi menu system for audio recording with manual and automatic modes, compatible with Waveshare 3.5-inch TFT touch display. Also works on Linux desktop systems using pygame with X11.
 
