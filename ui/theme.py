@@ -46,6 +46,11 @@ TEXT = (232, 238, 244)
 MUTED = (140, 150, 165)
 MUTED_DARK = (96, 104, 120)
 
+# Navigation button colors (for up/down arrows, etc.)
+BUTTON_NAV_BG = (120, 60, 20)  # Dark orange background
+BUTTON_NAV_BORDER = (160, 80, 30)  # Slightly lighter border
+BUTTON_NAV_ARROW = (200, 150, 100)  # Light orange/beige for arrows
+
 SMALL_FONT_SIZE = int(BASE_SMALL_FONT_SIZE * DESKTOP_SCALE)
 MEDIUM_FONT_SIZE = int(BASE_MEDIUM_FONT_SIZE * DESKTOP_SCALE)
 LARGE_FONT_SIZE = int(BASE_LARGE_FONT_SIZE * DESKTOP_SCALE)

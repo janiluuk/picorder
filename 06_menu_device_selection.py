@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from menu_settings import *
+from ui import theme
 
 ################################################################################
 # Device Selection menu - Browse and select audio input devices
@@ -203,27 +204,27 @@ def update_display():
     
     # Draw up button (button 1) with dark orange background
     up_rect = pygame.Rect(up_button_x, up_button_y, button_width, button_height)
-    pygame.draw.rect(screen, dark_orange, up_rect)
-    pygame.draw.rect(screen, dark_orange_border, up_rect, 2)
+    pygame.draw.rect(screen, theme.BUTTON_NAV_BG, up_rect)
+    pygame.draw.rect(screen, theme.BUTTON_NAV_BORDER, up_rect, 2)
     # Draw up arrow as a triangle shape
     up_arrow_points = [
         (up_button_x + button_width // 2, up_button_y + arrow_padding),  # Top point
         (up_button_x + arrow_side_padding, up_button_y + button_height - arrow_padding),  # Bottom left
         (up_button_x + button_width - arrow_side_padding, up_button_y + button_height - arrow_padding)  # Bottom right
     ]
-    pygame.draw.polygon(screen, arrow_color, up_arrow_points)
+    pygame.draw.polygon(screen, theme.BUTTON_NAV_ARROW, up_arrow_points)
     
-    # Draw down button (button 2) with dark orange background
+    # Draw down button (button 2) with navigation button colors from theme
     down_rect = pygame.Rect(down_button_x, down_button_y, button_width, button_height)
-    pygame.draw.rect(screen, dark_orange, down_rect)
-    pygame.draw.rect(screen, dark_orange_border, down_rect, 2)
+    pygame.draw.rect(screen, theme.BUTTON_NAV_BG, down_rect)
+    pygame.draw.rect(screen, theme.BUTTON_NAV_BORDER, down_rect, 2)
     # Draw down arrow as a triangle shape
     down_arrow_points = [
         (down_button_x + arrow_side_padding, down_button_y + arrow_padding),  # Top left
         (down_button_x + button_width - arrow_side_padding, down_button_y + arrow_padding),  # Top right
         (down_button_x + button_width // 2, down_button_y + button_height - arrow_padding)  # Bottom point
     ]
-    pygame.draw.polygon(screen, arrow_color, down_arrow_points)
+    pygame.draw.polygon(screen, theme.BUTTON_NAV_ARROW, down_arrow_points)
     
     pygame.display.update()
 
