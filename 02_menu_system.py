@@ -11,10 +11,19 @@ from ui import theme, primitives, icons, nav
 # System info display mode
 show_system_info = False
 
+# Initialize device index - find current device in list
+audio_devices = get_audio_devices()
+current_device_index = 0
+config = load_config()
+current_device = config.get("audio_device", "")
+for i, (dev, name) in enumerate(audio_devices):
+    if dev == current_device:
+        current_device_index = i
+        break
 
 
 def _1():
-    # Select audio device (button 1)
+    # Select audio device (button 1) - cycle through devices
     global current_device_index, config, audio_device, audio_devices
     # Refresh device list in case devices changed
     audio_devices = get_audio_devices()
@@ -23,10 +32,23 @@ def _1():
     if len(audio_devices) == 0:
         audio_devices = [("", "None (Disabled)")]
         current_device_index = 0
+    else:
+        # Find current device in refreshed list to maintain index
+        config = load_config()
+        current_device = config.get("audio_device", "")
+        found = False
+        for i, (dev, name) in enumerate(audio_devices):
+            if dev == current_device:
+                current_device_index = i
+                found = True
+                break
+        if not found:
+            current_device_index = 0
 
     # Cycle to next device
     current_device_index = (current_device_index + 1) % len(audio_devices)
     audio_device = audio_devices[current_device_index][0]
+    config = load_config()  # Load fresh config before modifying
     config["audio_device"] = audio_device
     save_config(config)
 
@@ -162,8 +184,24 @@ def update_display():
     if len(audio_devices) == 0:
         audio_devices = [("", "None (Disabled)")]
 
+    # Ensure current_device_index is valid (defensive check)
+    # Variable is initialized at module level, but device list may have changed
     if current_device_index >= len(audio_devices):
         current_device_index = 0
+    # Also verify the index still points to the current device (device list may have changed)
+    config = load_config()
+    current_device = config.get("audio_device", "")
+    # If current device doesn't match, find it in the list
+    if current_device_index < len(audio_devices):
+        if audio_devices[current_device_index][0] != current_device:
+            # Device list changed - find current device
+            for i, (dev, name) in enumerate(audio_devices):
+                if dev == current_device:
+                    current_device_index = i
+                    break
+            else:
+                # Current device not found in list, default to first
+                current_device_index = 0
 
     device_name = audio_devices[current_device_index][1]
     if len(device_name) > MAX_DEVICE_NAME_LENGTH:
@@ -192,17 +230,17 @@ def update_display():
         icon_cy = rect[1] + rect[3] // 2 - 8
 
         if idx == 0:
-            icons.draw_icon_record(screen, icon_cx, icon_cy, 20, active=device_valid)
+            icons.draw_icon_record(screen, icon_cx, icon_cy, theme.ICON_SIZE_MEDIUM, active=device_valid)
         elif idx == 1:
-            icons.draw_icon_chart(screen, icon_cx, icon_cy, 20)
+            icons.draw_icon_chart(screen, icon_cx, icon_cy, theme.ICON_SIZE_MEDIUM)
         elif idx == 2:
-            icons.draw_icon_list(screen, icon_cx, icon_cy, 20)
+            icons.draw_icon_list(screen, icon_cx, icon_cy, theme.ICON_SIZE_MEDIUM)
         elif idx == 3:
-            icons.draw_icon_gear(screen, icon_cx, icon_cy, 20)
+            icons.draw_icon_gear(screen, icon_cx, icon_cy, theme.ICON_SIZE_MEDIUM)
         elif idx == 4:
-            icons.draw_icon_power(screen, icon_cx, icon_cy, 20)
+            icons.draw_icon_power(screen, icon_cx, icon_cy, theme.ICON_SIZE_MEDIUM)
         else:
-            icons.draw_icon_chart(screen, icon_cx, icon_cy, 20)
+            icons.draw_icon_chart(screen, icon_cx, icon_cy, theme.ICON_SIZE_MEDIUM)
 
         label, status = labels[idx]
         label_surface = fonts["small"].render(label, True, theme.TEXT)

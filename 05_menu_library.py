@@ -84,9 +84,10 @@ is_playing = False
 _playback_lock = threading.Lock()
 _last_touch_pos = None
 
-ROW_HEIGHT = 48
-CONTROL_BUTTON_SIZE = 44
-CONTROL_BUTTON_GAP = 6
+# Layout constants (scaled via theme)
+ROW_HEIGHT = int(48 * (theme.SCREEN_WIDTH / 320))  # Scale proportionally with screen width
+CONTROL_BUTTON_SIZE = int(44 * (theme.SCREEN_WIDTH / 320))
+CONTROL_BUTTON_GAP = int(6 * (theme.SCREEN_WIDTH / 320))
 
 
 def _layout_cache():
@@ -141,7 +142,9 @@ def _draw_status_bar(surface, title, status_text):
 
 
 def _parse_duration(name):
-    match = re.search(r"(\\d{2})m(\\d{2})s", name)
+    # FIX: Regex pattern should use single backslash for digit character class
+    # Double backslash was being interpreted as literal backslash instead of \d
+    match = re.search(r"(\d{2})m(\d{2})s", name)
     if match:
         return f"{match.group(1)}m{match.group(2)}s"
     return "--m--s"
@@ -407,14 +410,14 @@ def update_display():
         row_color = theme.PANEL if is_selected else theme.BG
         primitives.rounded_rect(screen, row_rect, 8, row_color, outline=theme.OUTLINE, width=1)
 
-        icon_cx = list_x + 18
+        icon_cx = list_x + theme.PADDING_X + theme.PADDING_X // 2
         icon_cy = row_y + (ROW_HEIGHT // 2)
         if display_is_playing and is_selected:
-            icons.draw_icon_stop(screen, icon_cx, icon_cy, 18)
+            icons.draw_icon_stop(screen, icon_cx, icon_cy, theme.ICON_SIZE_SMALL)
         else:
-            icons.draw_icon_play(screen, icon_cx, icon_cy, 18)
+            icons.draw_icon_play(screen, icon_cx, icon_cy, theme.ICON_SIZE_SMALL)
 
-        text_x = list_x + 36
+        text_x = list_x + theme.PADDING_X * 3 + theme.ICON_SIZE_SMALL
         date_text = fonts["small"].render(timestamp, True, theme.MUTED)
         screen.blit(date_text, (text_x, row_y + 6))
 
@@ -440,7 +443,7 @@ def update_display():
         elif icon_draw == "down":
             pygame.draw.polygon(screen, theme.TEXT, [(rx + 10, ry + 10), (rx + rw - 10, ry + 10), (rx + rw // 2, ry + rh - 10)])
         else:
-            icons.draw_icon_trash(screen, rx + rw // 2, ry + rh // 2, 20)
+            icons.draw_icon_trash(screen, rx + rw // 2, ry + rh // 2, theme.ICON_SIZE_MEDIUM)
 
     nav.draw_nav(screen, "library")
     pygame.display.update()
@@ -473,8 +476,8 @@ def _row_action():
 action_handlers = {
     "nav_home": _5,
     "nav_library": lambda: None,
-    "nav_stats": lambda: go_to_page(PAGE_04),
-    "nav_settings": lambda: go_to_page(PAGE_02),
+    "nav_stats": lambda: (_stop_playback_safe(), go_to_page(PAGE_04)),
+    "nav_settings": lambda: (_stop_playback_safe(), go_to_page(PAGE_02)),
     "up": _1,
     "down": _2,
     "delete": _4,

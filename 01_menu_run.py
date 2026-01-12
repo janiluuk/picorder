@@ -474,6 +474,32 @@ def auto_record_monitor():
         else:
             time.sleep(FILE_CHECK_INTERVAL)
 
+# Audio level cache for visualizer (updated periodically to avoid blocking UI)
+_audio_level_cache = 0.0
+_audio_level_cache_time = 0.0
+AUDIO_LEVEL_UPDATE_INTERVAL = 0.1  # Update audio level every 100ms
+
+def _get_cached_audio_level():
+    """Get cached audio level for visualizer (non-blocking)"""
+    global _audio_level_cache, _audio_level_cache_time
+    current_time = time.time()
+    
+    # Update cache if it's stale (older than update interval)
+    if current_time - _audio_level_cache_time > AUDIO_LEVEL_UPDATE_INTERVAL:
+        try:
+            audio_device = get_audio_device()
+            if audio_device:
+                # Get actual audio level (this can block for ~50ms, but only every 100ms)
+                _audio_level_cache = get_audio_level(audio_device, sample_duration=0.05)
+            else:
+                _audio_level_cache = 0.0
+        except Exception as e:
+            logger.debug(f"Error getting audio level for visualizer: {e}")
+            _audio_level_cache = 0.0
+        _audio_level_cache_time = current_time
+    
+    return _audio_level_cache
+
 def _layout_cache():
     content_y = theme.TOP_BAR_HEIGHT
     content_h = theme.SCREEN_HEIGHT - theme.TOP_BAR_HEIGHT - theme.NAV_BAR_HEIGHT
@@ -560,16 +586,41 @@ def _draw_home_content(surface, timer_text, secondary_text, is_recording, auto_e
     secondary_surface = fonts["medium"].render(secondary_text, True, theme.MUTED)
     surface.blit(secondary_surface, (theme.PADDING_X, rects["content"][1] + 48))
 
+    # Audio level visualizer - show actual audio signal strength
     wave_rect = rects["wave"]
     wx, wy, ww, wh = wave_rect
     bar_count = 10
     bar_gap = 4
     bar_width = (ww - (bar_count - 1) * bar_gap) // bar_count
+    
+    # Get audio level for visualizer (use cached value to avoid blocking)
+    audio_level = _get_cached_audio_level()
+    
+    # Create visualizer bars with actual audio levels
+    # Use frequency domain-like visualization: spread the level across bars with variation
     for i in range(bar_count):
-        height = int(wh * (0.3 + 0.6 * abs(math.sin(time.time() + i))))
+        # Create a pattern that responds to audio level
+        # Each bar represents a different frequency band, scaled by the overall level
+        band_factor = (i + 1) / bar_count  # 0.1 to 1.0
+        # Add some variation for visual interest, but base it on actual audio level
+        base_height = audio_level * band_factor * 0.9  # Scale by level and band
+        # Add small random-like variation based on position (creates natural variation)
+        variation = abs(math.sin(time.time() * 2 + i * 0.5)) * 0.1 * audio_level
+        normalized_height = base_height + variation
+        normalized_height = min(1.0, max(0.1, normalized_height))  # Clamp between 0.1 and 1.0
+        
+        height = int(wh * normalized_height)
         bar_x = wx + i * (bar_width + bar_gap)
         bar_y = wy + (wh - height)
-        pygame.draw.rect(surface, theme.MUTED_DARK, (bar_x, bar_y, bar_width, height))
+        
+        # Color bars based on level (green for low, yellow for medium, red for high)
+        if normalized_height > 0.7:
+            bar_color = theme.ACCENT  # Red/high
+        elif normalized_height > 0.4:
+            bar_color = theme.ACCENT_ALT  # Yellow/medium
+        else:
+            bar_color = theme.MUTED_DARK  # Dark/low
+        pygame.draw.rect(surface, bar_color, (bar_x, bar_y, bar_width, height))
 
     auto_rect = pygame.Rect(*rects["auto"])
     auto_color = theme.ACCENT_ALT if auto_enabled else theme.PANEL
@@ -586,7 +637,7 @@ def _draw_home_content(surface, timer_text, secondary_text, is_recording, auto_e
 
     power_rect = pygame.Rect(*rects["power"])
     primitives.rounded_rect(surface, power_rect, 10, theme.PANEL, outline=theme.OUTLINE, width=2)
-    icons.draw_icon_power(surface, power_rect.centerx, power_rect.centery, 18)
+    icons.draw_icon_power(surface, power_rect.centerx, power_rect.centery, theme.ICON_SIZE_SMALL)
 
     record_rect = pygame.Rect(*rects["record"])
     record_center = record_rect.center
@@ -598,7 +649,7 @@ def _draw_home_content(surface, timer_text, secondary_text, is_recording, auto_e
     stop_rect = pygame.Rect(*rects["stop"])
     stop_fill = theme.ACCENT if is_recording else theme.PANEL
     primitives.rounded_rect(surface, stop_rect, 8, stop_fill, outline=theme.OUTLINE, width=2)
-    icons.draw_icon_stop(surface, stop_rect.centerx, stop_rect.centery, 18)
+    icons.draw_icon_stop(surface, stop_rect.centerx, stop_rect.centery, theme.ICON_SIZE_SMALL)
 
 
 def _handle_touch(pos):

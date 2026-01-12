@@ -65,9 +65,9 @@ def update_display():
     fill = theme.ACCENT_ALT if is_running else theme.PANEL
 
     primitives.rounded_rect(screen, rect, 12, fill, outline=theme.OUTLINE, width=2)
-    icon_cx = rect[0] + 30
+    icon_cx = rect[0] + theme.PADDING_X * 3
     icon_cy = rect[1] + rect[3] // 2
-    icons.draw_icon_list(screen, icon_cx, icon_cy, 20)
+    icons.draw_icon_list(screen, icon_cx, icon_cy, theme.ICON_SIZE_MEDIUM)
 
     label_surface = fonts["medium"].render(service_labels[0], True, theme.TEXT)
     screen.blit(label_surface, (rect[0] + 60, rect[1] + 20))

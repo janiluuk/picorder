@@ -60,7 +60,8 @@ class RecordingStateMachine:
                     state_info['is_recording'] = self._recording_manager._cached_is_recording
                     state_info['mode'] = self._recording_manager._cached_mode
                     state_info['start_time'] = self._recording_manager._cached_start_time
-                except:
+                except (AttributeError, KeyError):
+                    # Fallback if cached values are missing or manager state is invalid
                     state_info['is_recording'] = False
                     state_info['mode'] = None
                     state_info['start_time'] = None

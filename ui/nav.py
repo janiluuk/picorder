@@ -75,12 +75,12 @@ def draw_nav(surface, active_tab):
             pygame.draw.rect(surface, theme.OUTLINE, pygame.Rect(rx + 2, ry + 2, rw - 4, rh - 4), 2, border_radius=8)
 
         if tab == "home":
-            icons.draw_icon_record(surface, icon_cx, icon_cy, 20, active=is_active)
+            icons.draw_icon_record(surface, icon_cx, icon_cy, theme.ICON_SIZE_MEDIUM, active=is_active)
         elif tab == "library":
-            icons.draw_icon_list(surface, icon_cx, icon_cy, 20)
+            icons.draw_icon_list(surface, icon_cx, icon_cy, theme.ICON_SIZE_MEDIUM)
         elif tab == "stats":
-            icons.draw_icon_chart(surface, icon_cx, icon_cy, 20)
+            icons.draw_icon_chart(surface, icon_cx, icon_cy, theme.ICON_SIZE_MEDIUM)
         elif tab == "settings":
-            icons.draw_icon_gear(surface, icon_cx, icon_cy, 20)
+            icons.draw_icon_gear(surface, icon_cx, icon_cy, theme.ICON_SIZE_MEDIUM)
 
         surface.blit(label_surface, (label_x, label_y))

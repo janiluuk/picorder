@@ -238,6 +238,7 @@ class RecordingManager:
         
         # Release lock before starting process (don't do cleanup upfront - only if needed)
         # Note: _starting_recording flag is set to prevent race conditions
+        # CRITICAL FIX (#20): Use try-finally to ensure flag is always cleared
         try:
             # Start arecord process (non-blocking)
             recording_process = Popen(cmd, stdout=PIPE, stderr=PIPE)
@@ -286,7 +287,7 @@ class RecordingManager:
                                 recording_process.stderr.close()
                         except (AttributeError, OSError):
                             pass  # Handles already closed
-                    except (AttributeError, ProcessLookupError) as e:
+                    except (AttributeError, ProcessLookupError, OSError) as e:
                         logger.debug(f"Error cleaning up failed process: {e}")
                     
                     # Only now do we try to kill zombie processes (lazy cleanup)
@@ -357,7 +358,7 @@ class RecordingManager:
                                 recording_process.stderr.close()
                         except (AttributeError, OSError):
                             pass
-                    except (AttributeError, ProcessLookupError) as e:
+                    except (AttributeError, ProcessLookupError, OSError) as e:
                         logger.debug(f"Error cleaning up failed process: {e}")
                     # Clear the starting flag on failure
                     with self._lock:
@@ -380,16 +381,18 @@ class RecordingManager:
                 
         except OSError as e:
             logger.error(f"OS error starting recording: {e}")
-            # Clear the starting flag on error
-            with self._lock:
-                self._starting_recording = False
             return False
         except Exception as e:
             logger.error(f"Unexpected error starting recording: {e}", exc_info=True)
-            # Clear the starting flag on error
-            with self._lock:
-                self._starting_recording = False
             return False
+        finally:
+            # CRITICAL FIX (#20): Ensure flag is always cleared, even if exception occurs
+            # This prevents deadlock where recording can't start because flag is stuck True
+            with self._lock:
+                if self._starting_recording and not self._is_recording:
+                    # Only clear if we haven't successfully started recording
+                    # (success case clears it explicitly at line 378)
+                    self._starting_recording = False
     
     def stop_recording(self):
         """Stop audio recording and rename file with duration"""
