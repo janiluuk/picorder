@@ -1,5 +1,7 @@
 """Theme settings for the modern 320x240 UI."""
 
+import os
+
 # Base dimensions for Raspberry Pi TFT display (320x240)
 BASE_SCREEN_WIDTH = 320
 BASE_SCREEN_HEIGHT = 240
@@ -16,7 +18,6 @@ BASE_LARGE_FONT_SIZE = 34
 def _is_desktop():
     """Detect if running on desktop (not Raspberry Pi)"""
     try:
-        import os
         with open('/proc/cpuinfo', 'r') as f:
             cpuinfo = f.read()
             return not ('Raspberry Pi' in cpuinfo or 'BCM' in cpuinfo)
