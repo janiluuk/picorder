@@ -182,24 +182,35 @@ def update_display():
     
     # Draw up/down buttons on the right side - same style as library browser
     import pygame
-    # Larger button size: 60x40 pixels
-    up_button_x = 410
-    up_button_y = 30  # Moved up to near the top
-    down_button_x = 410
-    down_button_y = 75  # Positioned below up button
+    # Scale button dimensions with screen size (base values: 60x40 for 320px width screen)
+    scale_factor = theme.SCREEN_WIDTH / 320
+    button_width = int(60 * scale_factor)
+    button_height = int(40 * scale_factor)
     
-    button_width = 60
-    button_height = 40
+    # Position buttons on right side, scaled appropriately
+    up_button_x = theme.SCREEN_WIDTH - button_width - int(10 * scale_factor)
+    up_button_y = int(30 * scale_factor)  # Moved up to near the top
+    down_button_x = up_button_x  # Same x position as up button
+    down_button_y = up_button_y + button_height + int(5 * scale_factor)  # Positioned below up button with gap
     
-    # Draw up button (button 1) with navigation button colors from theme
+    # Dark orange background color (low contrast, dark)
+    dark_orange = (120, 60, 20)  # Dark orange with low brightness
+    dark_orange_border = (160, 80, 30)  # Slightly lighter for border
+    arrow_color = (200, 150, 100)  # Light orange/beige for arrows (good contrast on dark orange)
+    
+    # Scale arrow padding
+    arrow_padding = int(10 * scale_factor)
+    arrow_side_padding = int(15 * scale_factor)
+    
+    # Draw up button (button 1) with dark orange background
     up_rect = pygame.Rect(up_button_x, up_button_y, button_width, button_height)
     pygame.draw.rect(screen, theme.BUTTON_NAV_BG, up_rect)
     pygame.draw.rect(screen, theme.BUTTON_NAV_BORDER, up_rect, 2)
     # Draw up arrow as a triangle shape
     up_arrow_points = [
-        (up_button_x + button_width // 2, up_button_y + 10),  # Top point
-        (up_button_x + 15, up_button_y + button_height - 10),  # Bottom left
-        (up_button_x + button_width - 15, up_button_y + button_height - 10)  # Bottom right
+        (up_button_x + button_width // 2, up_button_y + arrow_padding),  # Top point
+        (up_button_x + arrow_side_padding, up_button_y + button_height - arrow_padding),  # Bottom left
+        (up_button_x + button_width - arrow_side_padding, up_button_y + button_height - arrow_padding)  # Bottom right
     ]
     pygame.draw.polygon(screen, theme.BUTTON_NAV_ARROW, up_arrow_points)
     
@@ -209,9 +220,9 @@ def update_display():
     pygame.draw.rect(screen, theme.BUTTON_NAV_BORDER, down_rect, 2)
     # Draw down arrow as a triangle shape
     down_arrow_points = [
-        (down_button_x + 15, down_button_y + 10),  # Top left
-        (down_button_x + button_width - 15, down_button_y + 10),  # Top right
-        (down_button_x + button_width // 2, down_button_y + button_height - 10)  # Bottom point
+        (down_button_x + arrow_side_padding, down_button_y + arrow_padding),  # Top left
+        (down_button_x + button_width - arrow_side_padding, down_button_y + arrow_padding),  # Top right
+        (down_button_x + button_width // 2, down_button_y + button_height - arrow_padding)  # Bottom point
     ]
     pygame.draw.polygon(screen, theme.BUTTON_NAV_ARROW, down_arrow_points)
     
