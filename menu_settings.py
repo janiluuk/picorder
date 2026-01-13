@@ -9,6 +9,7 @@ import threading
 import shutil
 import json
 import logging
+import subprocess
 from pathlib import Path
 from ui import theme
 
@@ -137,6 +138,10 @@ AUDIO_METER_HIGH_THRESHOLD = 0.8  # Audio meter color threshold for red
 
 # Device name display length
 MAX_DEVICE_NAME_LENGTH = 20
+
+# Audio detection timeouts
+AUDIO_DETECTION_TIMEOUT_BUFFER = 1.0  # Extra time to wait beyond sample duration
+PROCESS_CLEANUP_TIMEOUT = 0.5  # Time to wait for process cleanup
 
 # Device validation cache
 _device_validation_cache = {}
@@ -530,7 +535,6 @@ def detect_audio_signal(device, threshold=0.01, sample_duration=0.1):
         # Use arecord to capture a small sample and check for non-zero data
         # Use separate processes connected via Python instead of shell pipeline
         # to avoid shell injection vulnerabilities
-        import subprocess
         
         # Start arecord process
         arecord_proc = subprocess.Popen(
@@ -557,11 +561,11 @@ def detect_audio_signal(device, threshold=0.01, sample_duration=0.1):
         
         # Wait for processes to complete (with timeout)
         try:
-            od_proc.wait(timeout=sample_duration + 1.0)
+            od_proc.wait(timeout=sample_duration + AUDIO_DETECTION_TIMEOUT_BUFFER)
         except subprocess.TimeoutExpired:
             od_proc.kill()
         try:
-            arecord_proc.wait(timeout=0.5)
+            arecord_proc.wait(timeout=PROCESS_CLEANUP_TIMEOUT)
         except subprocess.TimeoutExpired:
             arecord_proc.kill()
         

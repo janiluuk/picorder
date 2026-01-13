@@ -57,7 +57,8 @@ class TestRecordingIntegration(unittest.TestCase):
         result = menu_settings.start_recording("plughw:0,0", mode="manual")
         
         self.assertTrue(result)
-        mock_manager.start_recording.assert_called_once_with("plughw:0,0", mode="manual")
+        # The wrapper calls start_recording with positional args, not keyword args
+        mock_manager.start_recording.assert_called_once_with("plughw:0,0", "manual")
         
         # Stop recording
         mock_manager.is_recording = True
