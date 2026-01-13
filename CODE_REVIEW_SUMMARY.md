@@ -68,15 +68,16 @@ All subprocess calls in the codebase follow safe patterns:
 ## Performance Considerations
 
 ### Already Optimized ✓
-- Config caching with 1-second TTL (reduces file I/O)
+- Config caching with 0.5-second TTL (reduced from 1.0s for more responsive UI)
 - Device validation caching with 5-second TTL
 - Worker thread uses blocking queue (no polling overhead)
 - Non-blocking recording state checks available
+- Auto-record polling optimized: 0.3s when recording, 2.0s when idle (reduced CPU usage)
 
-### Potential Future Optimizations
-1. Consider reducing config cache TTL to 0.5s for more responsive UI
-2. Review file checking in auto_record_monitor (uses 1s polling)
-3. Consider connection pooling if database is added
+### Performance Improvements Implemented ✓
+1. ✓ **Reduced config cache TTL to 0.5s** - Config reads are now fresher for more responsive UI
+2. ✓ **Optimized auto_record_monitor polling** - Reduced active polling from 0.5s to 0.3s for faster response, increased idle polling from 1.0s to 2.0s to reduce CPU usage
+3. N/A Connection pooling - No database currently in use
 
 ## Code Structure Analysis
 

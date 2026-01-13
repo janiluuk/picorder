@@ -124,9 +124,9 @@ SILENTJACK_SCRIPT = MENUDIR / "silentjack_monitor.sh"
 # Constants
 PROCESS_TERMINATE_TIMEOUT = 2  # seconds
 PROCESS_KILL_DELAY = 0.5  # seconds
-AUTO_RECORD_POLL_INTERVAL = 0.5  # seconds
+AUTO_RECORD_POLL_INTERVAL = 0.3  # seconds - reduced for more responsive auto-record
 DEVICE_VALIDATION_CACHE_TTL = 5.0  # seconds - cache device validation results
-FILE_CHECK_INTERVAL = 1.0  # seconds - check files less frequently when idle
+FILE_CHECK_INTERVAL = 2.0  # seconds - increased to reduce CPU usage when idle
 
 # Disk space and audio constants
 MIN_FREE_DISK_SPACE_GB = 0.1  # Minimum free disk space required for recording (100MB)
@@ -151,7 +151,7 @@ _device_cache_lock = threading.Lock()
 _config_cache = None
 _config_cache_time = 0
 _config_cache_lock = threading.Lock()
-CONFIG_CACHE_TTL = 1.0  # Cache config for 1 second to balance freshness and performance
+CONFIG_CACHE_TTL = 0.5  # Cache config for 0.5 seconds for more responsive UI
 
 ################################################################################
 
