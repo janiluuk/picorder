@@ -528,11 +528,43 @@ def detect_audio_signal(device, threshold=0.01, sample_duration=0.1):
     """Detect if there's audio signal (for silent jack detection)"""
     try:
         # Use arecord to capture a small sample and check for non-zero data
-        # Use shell=True for pipeline command (safer than cmd.split() with pipes)
-        # Note: Device is validated elsewhere, so injection risk is minimized
-        cmd = "arecord -D {} -d {} -f cd -t raw 2>/dev/null | od -An -td2 | head -1".format(
-            device, sample_duration)
-        output = run_cmd(cmd)  # run_cmd will detect shell operators and use shell=True
+        # Use separate processes connected via Python instead of shell pipeline
+        # to avoid shell injection vulnerabilities
+        import subprocess
+        
+        # Start arecord process
+        arecord_proc = subprocess.Popen(
+            ["arecord", "-D", device, "-d", str(sample_duration), "-f", "cd", "-t", "raw"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL
+        )
+        
+        # Pipe output to od
+        od_proc = subprocess.Popen(
+            ["od", "-An", "-td2"],
+            stdin=arecord_proc.stdout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL
+        )
+        
+        # Allow arecord_proc to receive SIGPIPE if od_proc exits
+        if arecord_proc.stdout:
+            arecord_proc.stdout.close()
+        
+        # Get first line only
+        output_bytes = od_proc.stdout.readline() if od_proc.stdout else b""
+        output = output_bytes.decode('utf-8', errors='ignore').strip()
+        
+        # Wait for processes to complete (with timeout)
+        try:
+            od_proc.wait(timeout=sample_duration + 1.0)
+        except subprocess.TimeoutExpired:
+            od_proc.kill()
+        try:
+            arecord_proc.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            arecord_proc.kill()
+        
         # Check if output contains non-zero values
         values = [int(x) for x in output.split() if x.isdigit() or (x.startswith('-') and x[1:].isdigit())]
         if values:
