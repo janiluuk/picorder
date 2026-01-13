@@ -6,7 +6,6 @@ import math
 from queue import Queue
 import queue as queue_module
 import menu_settings as ms
-from recording_state import RecordingStateMachine, RecordingState
 from ui import theme, primitives, icons, nav
 
 ################################################################################

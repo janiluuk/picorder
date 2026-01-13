@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+"""
+Stats Menu - System statistics display interface
+Shows battery, storage, input device, and auto-record status
+"""
 from menu_settings import *
 from ui import theme, primitives, nav
 
