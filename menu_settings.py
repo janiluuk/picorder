@@ -9,6 +9,7 @@ import threading
 import shutil
 import json
 import logging
+import subprocess
 from pathlib import Path
 from ui import theme
 
@@ -123,9 +124,9 @@ SILENTJACK_SCRIPT = MENUDIR / "silentjack_monitor.sh"
 # Constants
 PROCESS_TERMINATE_TIMEOUT = 2  # seconds
 PROCESS_KILL_DELAY = 0.5  # seconds
-AUTO_RECORD_POLL_INTERVAL = 0.5  # seconds
+AUTO_RECORD_POLL_INTERVAL = 0.3  # seconds - reduced for more responsive auto-record
 DEVICE_VALIDATION_CACHE_TTL = 5.0  # seconds - cache device validation results
-FILE_CHECK_INTERVAL = 1.0  # seconds - check files less frequently when idle
+FILE_CHECK_INTERVAL = 2.0  # seconds - increased to reduce CPU usage when idle
 
 # Disk space and audio constants
 MIN_FREE_DISK_SPACE_GB = 0.1  # Minimum free disk space required for recording (100MB)
@@ -138,6 +139,10 @@ AUDIO_METER_HIGH_THRESHOLD = 0.8  # Audio meter color threshold for red
 # Device name display length
 MAX_DEVICE_NAME_LENGTH = 20
 
+# Audio detection timeouts
+AUDIO_DETECTION_TIMEOUT_BUFFER = 1.0  # Extra time to wait beyond sample duration
+PROCESS_CLEANUP_TIMEOUT = 0.5  # Time to wait for process cleanup
+
 # Device validation cache
 _device_validation_cache = {}
 _device_cache_lock = threading.Lock()
@@ -146,7 +151,7 @@ _device_cache_lock = threading.Lock()
 _config_cache = None
 _config_cache_time = 0
 _config_cache_lock = threading.Lock()
-CONFIG_CACHE_TTL = 1.0  # Cache config for 1 second to balance freshness and performance
+CONFIG_CACHE_TTL = 0.5  # Cache config for 0.5 seconds for more responsive UI
 
 ################################################################################
 
@@ -528,11 +533,42 @@ def detect_audio_signal(device, threshold=0.01, sample_duration=0.1):
     """Detect if there's audio signal (for silent jack detection)"""
     try:
         # Use arecord to capture a small sample and check for non-zero data
-        # Use shell=True for pipeline command (safer than cmd.split() with pipes)
-        # Note: Device is validated elsewhere, so injection risk is minimized
-        cmd = "arecord -D {} -d {} -f cd -t raw 2>/dev/null | od -An -td2 | head -1".format(
-            device, sample_duration)
-        output = run_cmd(cmd)  # run_cmd will detect shell operators and use shell=True
+        # Use separate processes connected via Python instead of shell pipeline
+        # to avoid shell injection vulnerabilities
+        
+        # Start arecord process
+        arecord_proc = subprocess.Popen(
+            ["arecord", "-D", device, "-d", str(sample_duration), "-f", "cd", "-t", "raw"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL
+        )
+        
+        # Pipe output to od
+        od_proc = subprocess.Popen(
+            ["od", "-An", "-td2"],
+            stdin=arecord_proc.stdout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL
+        )
+        
+        # Allow arecord_proc to receive SIGPIPE if od_proc exits
+        if arecord_proc.stdout:
+            arecord_proc.stdout.close()
+        
+        # Get first line only
+        output_bytes = od_proc.stdout.readline() if od_proc.stdout else b""
+        output = output_bytes.decode('utf-8', errors='ignore').strip()
+        
+        # Wait for processes to complete (with timeout)
+        try:
+            od_proc.wait(timeout=sample_duration + AUDIO_DETECTION_TIMEOUT_BUFFER)
+        except subprocess.TimeoutExpired:
+            od_proc.kill()
+        try:
+            arecord_proc.wait(timeout=PROCESS_CLEANUP_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            arecord_proc.kill()
+        
         # Check if output contains non-zero values
         values = [int(x) for x in output.split() if x.isdigit() or (x.startswith('-') and x[1:].isdigit())]
         if values:

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+"""
+Services Menu - System services management interface
+Allows starting/stopping system services like transmission-daemon
+"""
 from menu_settings import *
 from ui import theme, primitives, icons, nav
 

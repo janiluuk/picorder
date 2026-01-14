@@ -97,6 +97,7 @@ class TestDebouncing(unittest.TestCase):
             'audio_device': "plughw:2,0",
             'logger': logger,
             'load_config': lambda: {"audio_device": "plughw:2,0", "auto_record": False},
+            'get_audio_device': lambda: "plughw:2,0",  # Add the missing function
             'queue_module': __import__('queue'),
             'time': time,
             'threading': threading,
@@ -228,19 +229,27 @@ class TestDebouncing(unittest.TestCase):
         if hasattr(self._2, '_last_call_time'):
             delattr(self._2, '_last_call_time')
         
-        # Set optimistic state to not recording, but pending_start is True
-        with menu_settings._optimistic_state_lock:
-            menu_settings._optimistic_recording_state['is_recording'] = False
-            menu_settings._optimistic_recording_state['pending_start'] = True  # Pending operation
-            menu_settings._optimistic_recording_state['pending_stop'] = False
+        # The simplified implementation uses only debouncing (time-based) to prevent double-clicks
+        # It does NOT check pending_start flags - those were removed in the refactoring
+        # Instead, it queues operations based solely on the actual recording state
         
-        # Mock get_recording_state to return not recording
+        # Set actual recording state to not recording
         with patch.object(self.manager, 'get_recording_state', return_value={'is_recording': False, 'mode': None, 'start_time': None}):
+            # First click - should queue start
             self._2()
+            queue_size1 = menu_settings._recording_queue.qsize()
+            self.assertEqual(queue_size1, 1, "First click should queue operation")
             
-            # Should NOT queue start because pending_start is True
-            queue_size = menu_settings._recording_queue.qsize()
-            self.assertEqual(queue_size, 0, "Should not queue operation when pending_start is True")
+            # Immediate second click (within debounce window) - should be ignored due to debounce
+            self._2()
+            queue_size2 = menu_settings._recording_queue.qsize()
+            self.assertEqual(queue_size2, 1, "Second click within debounce window should be ignored")
+            
+            # Click after debounce window - should queue another operation
+            time.sleep(0.25)  # Wait for debounce window to pass (>200ms)
+            self._2()
+            queue_size3 = menu_settings._recording_queue.qsize()
+            self.assertEqual(queue_size3, 2, "Click after debounce window should queue another operation")
 
 
 if __name__ == '__main__':

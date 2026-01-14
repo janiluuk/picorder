@@ -37,7 +37,8 @@ class TestAutoRecordDefaults(unittest.TestCase):
         with patch('menu_settings.CONFIG_FILE', str(self.config_file)):
             from menu_settings import load_config
             
-            config = load_config()
+            # Force reload to bypass cache
+            config = load_config(force_reload=True)
             
             # Both should use the same default (True from default_config)
             value1 = config.get("auto_record", True)  # As used in line 17
@@ -81,12 +82,12 @@ class TestAutoRecordDefaults(unittest.TestCase):
             from menu_settings import load_config, save_config
             
             # Simulate what happens in 01_menu_run.py:
-            # Line 17: Initial load
-            config1 = load_config()
+            # Line 17: Initial load (force reload to bypass cache)
+            config1 = load_config(force_reload=True)
             initial_value = config1.get("auto_record", True)  # Should be True from default_config
             
-            # Line 27: What _1() reads
-            config2 = load_config()
+            # Line 27: What _1() reads (force reload to bypass cache)
+            config2 = load_config(force_reload=True)
             current_value = config2.get("auto_record", True)  # Should also be True
             
             # Both should be True and consistent
@@ -100,8 +101,8 @@ class TestAutoRecordDefaults(unittest.TestCase):
                 config2["auto_record"] = False
                 save_config(config2)
                 
-                # Reload and verify it's now False
-                config3 = load_config()
+                # Reload and verify it's now False (force reload to bypass cache)
+                config3 = load_config(force_reload=True)
                 toggled_value = config3.get("auto_record", True)
                 self.assertEqual(toggled_value, False, "After toggle, value should be False")
 
