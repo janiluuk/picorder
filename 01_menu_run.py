@@ -476,7 +476,7 @@ def auto_record_monitor():
 # Audio level cache for visualizer (updated periodically to avoid blocking UI)
 _audio_level_cache = 0.0
 _audio_level_cache_time = 0.0
-AUDIO_LEVEL_UPDATE_INTERVAL = 0.1  # Update audio level every 100ms
+AUDIO_LEVEL_UPDATE_INTERVAL = 0.2  # Update audio level every 200ms (optimized for Raspberry Pi)
 
 def _get_cached_audio_level():
     """Get cached audio level for visualizer (non-blocking)"""
@@ -510,7 +510,7 @@ def _layout_cache():
     record_cy = content_y + content_h // 2
     record_rect = (record_cx - record_size // 2, record_cy - record_size // 2, record_size, record_size)
     stop_rect = (theme.SCREEN_WIDTH - theme.PADDING_X - 44, content_y + content_h - 50, 44, 44)
-    power_rect = (theme.SCREEN_WIDTH - theme.PADDING_X - 44, content_y + 6, 44, 44)
+    power_rect = (theme.SCREEN_WIDTH - theme.PADDING_X - 48, content_y + 6, 48, 48)  # Increased from 44 to 48 for better touch target
     wave_rect = (theme.PADDING_X, content_y + 112, 170, 32)
     return {
         "content": content_rect,
