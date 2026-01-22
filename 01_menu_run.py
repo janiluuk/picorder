@@ -537,41 +537,47 @@ def _draw_status_bar(surface, title, status_text, mode_state_text=None):
     pygame.draw.line(surface, theme.OUTLINE, (0, theme.TOP_BAR_HEIGHT - 1), (theme.SCREEN_WIDTH, theme.TOP_BAR_HEIGHT - 1), 1)
 
     fonts = theme.get_fonts()
+    reserved_right = 96  # Space reserved for status text and icons
     
-    # If mode_state_text is provided, show it as subtitle under title
+    # If mode_state_text is provided, show two-line layout with title and subtitle
     if mode_state_text:
-        # Draw title on top line
+        # Draw title on top line (smaller font to fit two lines)
+        title_y_offset = 3
+        mode_state_y_offset = 15
         title_surface = fonts["small"].render(title, True, theme.TEXT)
-        surface.blit(title_surface, (theme.PADDING_X, 3))
+        surface.blit(title_surface, (theme.PADDING_X, title_y_offset))
         
         # Draw mode/state text on second line
         mode_surface = fonts["small"].render(mode_state_text, True, theme.MUTED)
-        surface.blit(mode_surface, (theme.PADDING_X, 15))
+        surface.blit(mode_surface, (theme.PADDING_X, mode_state_y_offset))
         
-        # Calculate reserved space for status text and icons
-        reserved_right = 96
+        # Position status text to align with center of two-line layout
+        status_y = 9  # Centered between the two lines
     else:
-        # Original single-line layout
-        reserved_right = 96
+        # Original single-line layout with medium font for title
         max_title_width = theme.SCREEN_WIDTH - (theme.PADDING_X * 2) - reserved_right
         title_text = primitives.elide_text(title, max_title_width, fonts["medium"])
         title_surface = fonts["medium"].render(title_text, True, theme.TEXT)
         surface.blit(title_surface, (theme.PADDING_X, 4))
+        
+        # Position status text for single-line layout
+        status_y = 6
 
+    # Draw status text and icons on the right side
     status_text = primitives.elide_text(status_text, reserved_right, fonts["small"])
     status_surface = fonts["small"].render(status_text, True, theme.MUTED)
     status_x = theme.SCREEN_WIDTH - theme.PADDING_X - status_surface.get_width()
-    status_y = 6
 
     icon_gap = 6
     icon_size = 12
     battery_x = status_x - icon_size - icon_gap
     storage_x = battery_x - icon_size - icon_gap
+    icon_y = 7  # Fixed Y position for icons
 
-    pygame.draw.rect(surface, theme.MUTED, (battery_x, 7, icon_size, 8), 1)
-    pygame.draw.rect(surface, theme.MUTED, (battery_x + icon_size, 9, 2, 4))
-    pygame.draw.rect(surface, theme.MUTED, (storage_x, 7, icon_size, 8), 1)
-    pygame.draw.line(surface, theme.MUTED, (storage_x + 3, 9), (storage_x + icon_size - 3, 9), 1)
+    pygame.draw.rect(surface, theme.MUTED, (battery_x, icon_y, icon_size, 8), 1)
+    pygame.draw.rect(surface, theme.MUTED, (battery_x + icon_size, icon_y + 2, 2, 4))
+    pygame.draw.rect(surface, theme.MUTED, (storage_x, icon_y, icon_size, 8), 1)
+    pygame.draw.line(surface, theme.MUTED, (storage_x + 3, icon_y + 2), (storage_x + icon_size - 3, icon_y + 2), 1)
 
     surface.blit(status_surface, (status_x, status_y))
 
