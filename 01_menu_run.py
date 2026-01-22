@@ -529,7 +529,7 @@ def _point_in_rect(pos, rect):
     return rx <= x <= rx + rw and ry <= y <= ry + rh
 
 
-def _draw_status_bar(surface, title, status_text):
+def _draw_status_bar(surface, title, status_text, mode_state_text=None):
     import pygame
 
     bar_rect = pygame.Rect(0, 0, theme.SCREEN_WIDTH, theme.TOP_BAR_HEIGHT)
@@ -537,11 +537,26 @@ def _draw_status_bar(surface, title, status_text):
     pygame.draw.line(surface, theme.OUTLINE, (0, theme.TOP_BAR_HEIGHT - 1), (theme.SCREEN_WIDTH, theme.TOP_BAR_HEIGHT - 1), 1)
 
     fonts = theme.get_fonts()
-    reserved_right = 96
-    max_title_width = theme.SCREEN_WIDTH - (theme.PADDING_X * 2) - reserved_right
-    title_text = primitives.elide_text(title, max_title_width, fonts["medium"])
-    title_surface = fonts["medium"].render(title_text, True, theme.TEXT)
-    surface.blit(title_surface, (theme.PADDING_X, 4))
+    
+    # If mode_state_text is provided, show it as subtitle under title
+    if mode_state_text:
+        # Draw title on top line
+        title_surface = fonts["small"].render(title, True, theme.TEXT)
+        surface.blit(title_surface, (theme.PADDING_X, 3))
+        
+        # Draw mode/state text on second line
+        mode_surface = fonts["small"].render(mode_state_text, True, theme.MUTED)
+        surface.blit(mode_surface, (theme.PADDING_X, 15))
+        
+        # Calculate reserved space for status text and icons
+        reserved_right = 96
+    else:
+        # Original single-line layout
+        reserved_right = 96
+        max_title_width = theme.SCREEN_WIDTH - (theme.PADDING_X * 2) - reserved_right
+        title_text = primitives.elide_text(title, max_title_width, fonts["medium"])
+        title_surface = fonts["medium"].render(title_text, True, theme.TEXT)
+        surface.blit(title_surface, (theme.PADDING_X, 4))
 
     status_text = primitives.elide_text(status_text, reserved_right, fonts["small"])
     status_surface = fonts["small"].render(status_text, True, theme.MUTED)
@@ -561,7 +576,7 @@ def _draw_status_bar(surface, title, status_text):
     surface.blit(status_surface, (status_x, status_y))
 
 
-def _draw_home_content(surface, timer_text, secondary_text, is_recording, auto_enabled):
+def _draw_home_content(surface, timer_text, is_recording, auto_enabled):
     import pygame
 
     rects = _layout_cache()
@@ -581,9 +596,6 @@ def _draw_home_content(surface, timer_text, secondary_text, is_recording, auto_e
             badge_text,
             (badge_rect.centerx - badge_text.get_width() // 2, badge_rect.centery - badge_text.get_height() // 2),
         )
-
-    secondary_surface = fonts["medium"].render(secondary_text, True, theme.MUTED)
-    surface.blit(secondary_surface, (theme.PADDING_X, rects["content"][1] + 48))
 
     # Audio level visualizer - show actual audio signal strength
     wave_rect = rects["wave"]
@@ -726,7 +738,7 @@ def update_display():
 
     mode_label = "Auto" if auto_record_enabled else "Manual"
     state_label = "Recording" if display_is_recording else "Ready"
-    secondary_text = f"{mode_label} • {state_label}"
+    mode_state_text = f"{mode_label} • {state_label}"
 
     status_text = "MIC 48k" if device_valid else "No Mic"
 
@@ -734,8 +746,8 @@ def update_display():
     try:
         pygame.event.pump()
         screen.fill(theme.BG)
-        _draw_status_bar(screen, "Recorder", status_text)
-        _draw_home_content(screen, timer_text, secondary_text, display_is_recording, auto_record_enabled)
+        _draw_status_bar(screen, "Recorder", status_text, mode_state_text)
+        _draw_home_content(screen, timer_text, display_is_recording, auto_record_enabled)
         nav.draw_nav(screen, "home")
         pygame.display.update()
         pygame.event.pump()
