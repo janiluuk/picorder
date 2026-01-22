@@ -10,6 +10,7 @@ import shutil
 import json
 import logging
 import subprocess
+import gc
 from pathlib import Path
 from ui import theme
 
@@ -1156,7 +1157,6 @@ def main(buttons=None, update_callback=None, touch_handler=None, action_handlers
     print(f"Main loop started (buttons={bool(buttons)}, callback={bool(update_callback)})", flush=True)
     
     # FPS limiting for Raspberry Pi optimization
-    import gc
     DISPLAY_FPS = 15  # Limit to 15 FPS for 40% CPU reduction
     clock = pygame.time.Clock()
     
@@ -1306,8 +1306,5 @@ def main(buttons=None, update_callback=None, touch_handler=None, action_handlers
         if memory_cleanup_counter >= MEMORY_CLEANUP_INTERVAL:
             memory_cleanup_counter = 0
             gc.collect()
-        
-        ## Reduce CPU utilisation (replaced with FPS limiting above)
-        # time.sleep(sleep_delay)  # Commented out - using clock.tick() instead
 
 ################################################################################

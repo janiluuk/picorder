@@ -7,6 +7,7 @@ from subprocess import Popen, PIPE, TimeoutExpired
 from pathlib import Path
 from datetime import datetime
 import re
+import time as time_module
 from ui import theme, primitives, icons, nav
 
 ################################################################################
@@ -305,7 +306,6 @@ def _3():
 def _4():
     """Delete selected recording with confirmation"""
     global recordings, selected_index, scroll_offset, _delete_confirmation_pending, _delete_confirmation_time
-    import time as time_module
     
     if not (0 <= selected_index < len(recordings)):
         return
@@ -467,7 +467,6 @@ def update_display():
     
     # Show confirmation message if delete is pending
     global _delete_confirmation_pending, _delete_confirmation_time
-    import time as time_module
     if _delete_confirmation_pending:
         current_time = time_module.time()
         if (current_time - _delete_confirmation_time) < DELETE_CONFIRMATION_TIMEOUT:
