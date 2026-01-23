@@ -24,8 +24,8 @@ def _is_desktop():
     except (OSError, IOError):
         return True  # Assume desktop if can't detect
 
-# Scale factor for desktop mode (2.5x makes it much bigger but still reasonable)
-DESKTOP_SCALE = 2.5 if _is_desktop() else 1.0
+# Scale factor for desktop mode (1.5x makes text readable without being too large)
+DESKTOP_SCALE = 1.5 if _is_desktop() else 1.0
 
 # Scaled dimensions
 SCREEN_WIDTH = int(BASE_SCREEN_WIDTH * DESKTOP_SCALE)

@@ -7,6 +7,7 @@ from subprocess import Popen, PIPE, TimeoutExpired
 from pathlib import Path
 from datetime import datetime
 import re
+import time as time_module
 from ui import theme, primitives, icons, nav
 
 ################################################################################
@@ -83,6 +84,11 @@ playback_process = None
 is_playing = False
 _playback_lock = threading.Lock()
 _last_touch_pos = None
+
+# Delete confirmation state
+_delete_confirmation_pending = False
+_delete_confirmation_time = 0
+DELETE_CONFIRMATION_TIMEOUT = 3.0  # seconds
 
 # Layout constants (scaled via theme)
 ROW_HEIGHT = int(48 * (theme.SCREEN_WIDTH / 320))  # Scale proportionally with screen width
@@ -298,9 +304,18 @@ def _3():
                     playback_process = None
 
 def _4():
-    """Delete selected recording"""
-    global recordings, selected_index, scroll_offset
-    if 0 <= selected_index < len(recordings):
+    """Delete selected recording with confirmation"""
+    global recordings, selected_index, scroll_offset, _delete_confirmation_pending, _delete_confirmation_time
+    
+    if not (0 <= selected_index < len(recordings)):
+        return
+    
+    current_time = time_module.time()
+    
+    # Check if we're within confirmation window
+    if _delete_confirmation_pending and (current_time - _delete_confirmation_time) < DELETE_CONFIRMATION_TIMEOUT:
+        # User confirmed - actually delete the file
+        _delete_confirmation_pending = False
         recording = recordings[selected_index]
         file_path = recording['path']
         try:
@@ -326,6 +341,11 @@ def _4():
         except Exception as e:
             logger.error(f"Unexpected error deleting recording: {e}", exc_info=True)
             update_display()  # Update display even on error
+    else:
+        # First press - ask for confirmation
+        _delete_confirmation_pending = True
+        _delete_confirmation_time = current_time
+        update_display()  # Redraw to show confirmation message
 
 def _5():
     """Back to main menu"""
@@ -444,6 +464,34 @@ def update_display():
             pygame.draw.polygon(screen, theme.TEXT, [(rx + 10, ry + 10), (rx + rw - 10, ry + 10), (rx + rw // 2, ry + rh - 10)])
         else:
             icons.draw_icon_trash(screen, rx + rw // 2, ry + rh // 2, theme.ICON_SIZE_MEDIUM)
+    
+    # Show confirmation message if delete is pending
+    global _delete_confirmation_pending, _delete_confirmation_time
+    if _delete_confirmation_pending:
+        current_time = time_module.time()
+        if (current_time - _delete_confirmation_time) < DELETE_CONFIRMATION_TIMEOUT:
+            # Draw confirmation overlay
+            overlay_rect = pygame.Rect(
+                theme.PADDING_X * 2,
+                theme.SCREEN_HEIGHT // 2 - 30,
+                theme.SCREEN_WIDTH - theme.PADDING_X * 4,
+                60
+            )
+            pygame.draw.rect(screen, theme.ACCENT, overlay_rect)
+            pygame.draw.rect(screen, theme.OUTLINE, overlay_rect, 2)
+            
+            confirm_text = fonts["medium"].render("Press DELETE again", True, theme.TEXT)
+            confirm_x = overlay_rect.centerx - confirm_text.get_width() // 2
+            confirm_y = overlay_rect.centery - confirm_text.get_height() // 2 - 8
+            screen.blit(confirm_text, (confirm_x, confirm_y))
+            
+            subtext = fonts["small"].render("to confirm", True, theme.TEXT)
+            subtext_x = overlay_rect.centerx - subtext.get_width() // 2
+            subtext_y = confirm_y + confirm_text.get_height() + 2
+            screen.blit(subtext, (subtext_x, subtext_y))
+        else:
+            # Timeout expired - clear confirmation
+            _delete_confirmation_pending = False
 
     nav.draw_nav(screen, "library")
     pygame.display.update()

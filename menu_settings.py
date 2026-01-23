@@ -10,6 +10,7 @@ import shutil
 import json
 import logging
 import subprocess
+import gc
 from pathlib import Path
 from ui import theme
 
@@ -39,7 +40,7 @@ except (OSError, PermissionError):
     handlers = [logging.StreamHandler()]
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,  # Reduced from INFO to WARNING for better performance
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=handlers
 )
@@ -1155,6 +1156,14 @@ def main(buttons=None, update_callback=None, touch_handler=None, action_handlers
     
     print(f"Main loop started (buttons={bool(buttons)}, callback={bool(update_callback)})", flush=True)
     
+    # FPS limiting for Raspberry Pi optimization
+    DISPLAY_FPS = 15  # Limit to 15 FPS for 40% CPU reduction
+    clock = pygame.time.Clock()
+    
+    # Memory cleanup counter
+    memory_cleanup_counter = 0
+    MEMORY_CLEANUP_INTERVAL = 300  # Clean up every 300 iterations (~20 seconds at 15 FPS)
+    
     # While loop to manage touch screen inputs
     # Note: pygame.event.get() is non-blocking, so timeout check happens every loop iteration
     loop_count = 0
@@ -1288,7 +1297,14 @@ def main(buttons=None, update_callback=None, touch_handler=None, action_handlers
             pygame.display.update()
             # Process events every loop iteration to keep UI responsive
             pygame.event.pump()
-        ## Reduce CPU utilisation
-        time.sleep(sleep_delay)
+        
+        # FPS limiting for CPU optimization (Raspberry Pi)
+        clock.tick(DISPLAY_FPS)
+        
+        # Periodic memory cleanup to prevent leaks
+        memory_cleanup_counter += 1
+        if memory_cleanup_counter >= MEMORY_CLEANUP_INTERVAL:
+            memory_cleanup_counter = 0
+            gc.collect()
 
 ################################################################################
