@@ -74,7 +74,7 @@ class TestDebouncing(unittest.TestCase):
             menu_settings._optimistic_state_lock = threading.Lock()
 
         # Read the _2() function from 01_menu_run.py and extract it
-        menu_run_path = Path(__file__).parent / "01_menu_run.py"
+        menu_run_path = Path(__file__).parent.parent / "01_menu_run.py"
         with open(menu_run_path, 'r') as f:
             code = f.read()
         

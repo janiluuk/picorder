@@ -64,7 +64,7 @@ class TestLibraryMenu(unittest.TestCase):
         
         # Import after patching - use importlib to handle module name starting with number
         import importlib.util
-        spec = importlib.util.spec_from_file_location("menu_library", "05_menu_library.py")
+        spec = importlib.util.spec_from_file_location("menu_library", os.path.join(os.path.dirname(__file__), "..", "05_menu_library.py"))
         library_menu = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(library_menu)
         
@@ -74,7 +74,7 @@ class TestLibraryMenu(unittest.TestCase):
     def test_get_recordings_with_files(self):
         """Test getting recordings with files"""
         import importlib.util
-        spec = importlib.util.spec_from_file_location("menu_library", "05_menu_library.py")
+        spec = importlib.util.spec_from_file_location("menu_library", os.path.join(os.path.dirname(__file__), "..", "05_menu_library.py"))
         library_menu = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(library_menu)
         
@@ -99,7 +99,7 @@ class TestLibraryMenu(unittest.TestCase):
         """Test playing a recording"""
         spec = importlib.util.spec_from_file_location(
             "menu_library", 
-            os.path.join(os.path.dirname(__file__), "05_menu_library.py")
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), "05_menu_library.py")
         )
         library_menu = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(library_menu)
@@ -121,7 +121,7 @@ class TestLibraryMenu(unittest.TestCase):
         """Test deleting a recording"""
         spec = importlib.util.spec_from_file_location(
             "menu_library", 
-            os.path.join(os.path.dirname(__file__), "05_menu_library.py")
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), "05_menu_library.py")
         )
         library_menu = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(library_menu)
@@ -144,7 +144,7 @@ class TestLibraryMenu(unittest.TestCase):
         """Test scrolling up through recordings"""
         spec = importlib.util.spec_from_file_location(
             "menu_library", 
-            os.path.join(os.path.dirname(__file__), "05_menu_library.py")
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), "05_menu_library.py")
         )
         library_menu = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(library_menu)
@@ -162,7 +162,7 @@ class TestLibraryMenu(unittest.TestCase):
         """Test scrolling down through recordings"""
         spec = importlib.util.spec_from_file_location(
             "menu_library", 
-            os.path.join(os.path.dirname(__file__), "05_menu_library.py")
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), "05_menu_library.py")
         )
         library_menu = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(library_menu)
@@ -180,7 +180,7 @@ class TestLibraryMenu(unittest.TestCase):
         """Test scrolling respects bounds"""
         spec = importlib.util.spec_from_file_location(
             "menu_library", 
-            os.path.join(os.path.dirname(__file__), "05_menu_library.py")
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), "05_menu_library.py")
         )
         library_menu = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(library_menu)
@@ -202,7 +202,7 @@ class TestLibraryMenu(unittest.TestCase):
         """Test back button navigation"""
         spec = importlib.util.spec_from_file_location(
             "menu_library", 
-            os.path.join(os.path.dirname(__file__), "05_menu_library.py")
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), "05_menu_library.py")
         )
         library_menu = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(library_menu)
@@ -215,7 +215,7 @@ class TestLibraryMenu(unittest.TestCase):
         """Test refreshing recordings list"""
         spec = importlib.util.spec_from_file_location(
             "menu_library", 
-            os.path.join(os.path.dirname(__file__), "05_menu_library.py")
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), "05_menu_library.py")
         )
         library_menu = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(library_menu)

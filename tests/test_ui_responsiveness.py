@@ -27,7 +27,7 @@ import menu_settings
 
 # Import 01_menu_run.py (name starts with number, need special handling)
 import importlib.util
-menu_run_path = Path(__file__).parent / "01_menu_run.py"
+menu_run_path = Path(__file__).parent.parent / "01_menu_run.py"
 spec = importlib.util.spec_from_file_location("menu_run", menu_run_path)
 menu_run = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(menu_run)
