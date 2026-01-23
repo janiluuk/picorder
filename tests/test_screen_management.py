@@ -20,7 +20,7 @@ sys.modules['pygame.time'] = MagicMock()
 sys.modules['pygame.event'] = MagicMock()
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import menu_settings
 
