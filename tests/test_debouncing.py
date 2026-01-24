@@ -14,7 +14,7 @@ import os
 import sys
 
 # Add the current directory to the path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Mock pygame and RPi.GPIO before importing menu_settings
 sys.modules['pygame'] = MagicMock()
@@ -74,7 +74,7 @@ class TestDebouncing(unittest.TestCase):
             menu_settings._optimistic_state_lock = threading.Lock()
 
         # Read the _2() function from 01_menu_run.py and extract it
-        menu_run_path = Path(__file__).parent / "01_menu_run.py"
+        menu_run_path = Path(__file__).parent.parent / "01_menu_run.py"
         with open(menu_run_path, 'r') as f:
             code = f.read()
         

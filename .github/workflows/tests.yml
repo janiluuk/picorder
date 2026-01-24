@@ -35,7 +35,7 @@ jobs:
     
     - name: Run tests with unittest
       run: |
-        python -m unittest test_menu_settings -v
+        python -m unittest tests.test_menu_settings -v
       env:
         # Mock environment variables for pygame
         SDL_FBDEV: /dev/null
@@ -47,5 +47,6 @@ jobs:
     - name: Check Python syntax
       run: |
         python -m py_compile *.py
+        python -m py_compile tests/*.py
         echo "Syntax check passed"
 

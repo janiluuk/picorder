@@ -14,7 +14,7 @@ import os
 import sys
 
 # Add the current directory to the path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Mock pygame and RPi.GPIO before importing menu_settings
 sys.modules['pygame'] = MagicMock()
@@ -27,7 +27,7 @@ import menu_settings
 
 # Import 01_menu_run.py (name starts with number, need special handling)
 import importlib.util
-menu_run_path = Path(__file__).parent / "01_menu_run.py"
+menu_run_path = Path(__file__).parent.parent / "01_menu_run.py"
 spec = importlib.util.spec_from_file_location("menu_run", menu_run_path)
 menu_run = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(menu_run)
