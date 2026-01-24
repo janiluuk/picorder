@@ -64,7 +64,7 @@ class TestLibraryMenu(unittest.TestCase):
         
         # Import after patching - use importlib to handle module name starting with number
         import importlib.util
-        spec = importlib.util.spec_from_file_location("menu_library", os.path.join(os.path.dirname(__file__), "..", "05_menu_library.py"))
+        spec = importlib.util.spec_from_file_location("menu_library", os.path.join(os.path.dirname(os.path.dirname(__file__)), "05_menu_library.py"))
         library_menu = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(library_menu)
         
@@ -74,7 +74,7 @@ class TestLibraryMenu(unittest.TestCase):
     def test_get_recordings_with_files(self):
         """Test getting recordings with files"""
         import importlib.util
-        spec = importlib.util.spec_from_file_location("menu_library", os.path.join(os.path.dirname(__file__), "..", "05_menu_library.py"))
+        spec = importlib.util.spec_from_file_location("menu_library", os.path.join(os.path.dirname(os.path.dirname(__file__)), "05_menu_library.py"))
         library_menu = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(library_menu)
         
