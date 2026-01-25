@@ -5,8 +5,19 @@ import pygame
 
 def draw_icon_record(surface, cx, cy, size, active=False):
     radius = size // 2
-    color = (235, 84, 84) if active else (200, 60, 60)
-    pygame.draw.circle(surface, color, (cx, cy), radius)
+    if active:
+        # Brighter red when recording
+        color = (255, 100, 100)
+        # Draw outer glow effect when recording
+        pygame.draw.circle(surface, (235, 84, 84), (cx, cy), radius + 2)
+        pygame.draw.circle(surface, color, (cx, cy), radius)
+        # Draw inner circle to indicate recording
+        inner_radius = radius // 3
+        pygame.draw.circle(surface, (200, 60, 60), (cx, cy), inner_radius)
+    else:
+        # Darker red when not recording
+        color = (200, 60, 60)
+        pygame.draw.circle(surface, color, (cx, cy), radius)
     pygame.draw.circle(surface, (30, 30, 30), (cx, cy), radius, 2)
 
 

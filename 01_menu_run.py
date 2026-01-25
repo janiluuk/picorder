@@ -505,8 +505,8 @@ def _layout_cache():
     content_rect = (0, content_y, theme.SCREEN_WIDTH, content_h)
     auto_rect = (theme.PADDING_X, content_y + 10, 130, 44)
     screen_rect = (theme.PADDING_X, content_y + 62, 130, 44)
-    record_size = 72
-    record_cx = theme.SCREEN_WIDTH - 70
+    record_size = 56
+    record_cx = theme.SCREEN_WIDTH - 62
     record_cy = content_y + content_h // 2
     record_rect = (record_cx - record_size // 2, record_cy - record_size // 2, record_size, record_size)
     stop_rect = (theme.SCREEN_WIDTH - theme.PADDING_X - 44, content_y + content_h - 50, 44, 44)
