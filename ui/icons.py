@@ -8,8 +8,9 @@ def draw_icon_record(surface, cx, cy, size, active=False):
     if active:
         # Brighter red when recording
         color = (255, 100, 100)
-        # Draw outer glow effect when recording
-        pygame.draw.circle(surface, (235, 84, 84), (cx, cy), radius + 2)
+        # Draw outer glow effect when recording (proportional to size)
+        glow_expansion = max(1, radius // 14)  # ~2px for 56px button, scales with size
+        pygame.draw.circle(surface, (235, 84, 84), (cx, cy), radius + glow_expansion)
         pygame.draw.circle(surface, color, (cx, cy), radius)
         # Draw inner circle to indicate recording
         inner_radius = radius // 3
