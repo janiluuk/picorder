@@ -2,7 +2,9 @@
 
 A Raspberry Pi menu system for audio recording with manual and automatic modes, compatible with Waveshare 3.5-inch TFT touch display. Also works on Linux desktop systems using pygame with X11.
 
-<img src="https://github.com/janiluuk/picorder/blob/main/img/screenshot_1.png" alt="screenshot" width="600"/>
+<img src="https://github.com/janiluuk/picorder/blob/main/docs/screenshots/01_home_idle.png" alt="Home Screen - Idle State" width="600"/>
+
+*The Home screen in idle state, ready to start recording manually or automatically when an audio jack is plugged in.*
 
 ## Hardware Compatibility ##
 
@@ -77,7 +79,9 @@ To run the menu on a Linux desktop system:
 - **Screen Management**: Screen turns off after 30 seconds of inactivity, stays on during recording
 - **Smart File Naming**: Recordings are automatically named with date, time, and duration (e.g., `recording_20240115_143022_05m32s.wav`)
 
-<img src="https://github.com/janiluuk/picorder/blob/main/img/screenshot_2.png" alt="screenshot" width="600"/>
+<img src="https://github.com/janiluuk/picorder/blob/main/docs/screenshots/02_home_recording.png" alt="Home Screen - Recording" width="600"/>
+
+*The Home screen during active recording, showing the elapsed time and recording status. The record button changes to indicate active recording.*
 
 ## Usage ##
 
@@ -114,7 +118,17 @@ The recorder screen is the default view.
 - Tap the large record button to start recording manually.
 - Tap it again (or the stop-square button) to stop recording.
 
-<img src="https://github.com/janiluuk/picorder/blob/main/img/screenshot_3.png" alt="screenshot2" width="600"/>
+<img src="https://github.com/janiluuk/picorder/blob/main/docs/screenshots/03_library.png" alt="Library Screen" width="600"/>
+
+*The Library screen displays recent recordings with timestamps and filenames. Use the navigation arrows to browse recordings and the trash icon to delete selected files.*
+
+<img src="https://github.com/janiluuk/picorder/blob/main/docs/screenshots/04_stats.png" alt="Stats Screen" width="600"/>
+
+*The Stats screen shows system information in a grid layout, including battery status, available storage space, selected input device, and auto-record status.*
+
+<img src="https://github.com/janiluuk/picorder/blob/main/docs/screenshots/05_settings.png" alt="Settings Screen" width="600"/>
+
+*The Settings screen provides quick access to key configuration options through an icon grid: audio device selection, auto-record toggle, storage library access, system services, screen timeout, and system information.*
 
 ### Library (LIB)
 
