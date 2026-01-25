@@ -509,7 +509,6 @@ def _layout_cache():
     record_cx = theme.SCREEN_WIDTH - 62
     record_cy = content_y + content_h // 2
     record_rect = (record_cx - record_size // 2, record_cy - record_size // 2, record_size, record_size)
-    stop_rect = (theme.SCREEN_WIDTH - theme.PADDING_X - 44, content_y + content_h - 50, 44, 44)
     power_rect = (theme.SCREEN_WIDTH - theme.PADDING_X - 48, content_y + 6, 48, 48)  # Increased from 44 to 48 for better touch target
     wave_rect = (theme.PADDING_X, content_y + 112, 170, 32)
     return {
@@ -517,7 +516,6 @@ def _layout_cache():
         "auto": auto_rect,
         "screen": screen_rect,
         "record": record_rect,
-        "stop": stop_rect,
         "power": power_rect,
         "wave": wave_rect,
     }
@@ -663,10 +661,6 @@ def _draw_home_content(surface, timer_text, is_recording, auto_enabled):
         stop_text = fonts["small"].render("STOP", True, theme.TEXT)
         surface.blit(stop_text, (record_center[0] - stop_text.get_width() // 2, record_center[1] - stop_text.get_height() // 2))
 
-    stop_rect = pygame.Rect(*rects["stop"])
-    stop_fill = theme.ACCENT if is_recording else theme.PANEL
-    primitives.rounded_rect(surface, stop_rect, 8, stop_fill, outline=theme.OUTLINE, width=2)
-    icons.draw_icon_stop(surface, stop_rect.centerx, stop_rect.centery, theme.ICON_SIZE_SMALL)
 
 
 def _handle_touch(pos):
@@ -681,8 +675,6 @@ def _handle_touch(pos):
         return "auto"
     if _point_in_rect(pos, rects["screen"]):
         return "screen"
-    if _point_in_rect(pos, rects["stop"]):
-        return "stop"
     if _point_in_rect(pos, rects["power"]):
         return "power"
     return None
@@ -814,7 +806,6 @@ try:
         "auto": _1,
         "screen": _5,
         "power": _5,
-        "stop": _stop_any_recording,
     }
 
     main(update_callback=update_display, touch_handler=_handle_touch, action_handlers=action_handlers)
